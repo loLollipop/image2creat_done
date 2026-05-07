@@ -3,6 +3,8 @@ import axios, {AxiosError, type AxiosRequestConfig} from "axios";
 import webConfig from "@/constants/common-env";
 import {clearStoredAuthSession, getStoredAuthKey} from "@/store/auth";
 
+const loginPath = `${webConfig.basePath || ""}/login`;
+
 type RequestConfig = AxiosRequestConfig & {
     redirectOnUnauthorized?: boolean;
 };
@@ -52,9 +54,9 @@ request.interceptors.response.use(
         const shouldRedirect = (error.config as RequestConfig | undefined)?.redirectOnUnauthorized !== false;
         if (status === 401 && shouldRedirect && typeof window !== "undefined") {
             // Avoid redirect loop — only redirect if not already on /login
-            if (!window.location.pathname.startsWith("/login")) {
+            if (!window.location.pathname.startsWith(loginPath)) {
                 await clearStoredAuthSession();
-                window.location.replace("/login");
+                window.location.replace(loginPath);
                 // Return a never-resolving promise to prevent further error handling
                 // while the browser navigates away
                 return new Promise(() => {});
