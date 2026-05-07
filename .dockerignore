@@ -11,3 +11,6 @@ output
 .DS_Store
 .idea
 .vscode
+
+# Vendored upstream services (built by their own services in docker-compose).
+vendor/

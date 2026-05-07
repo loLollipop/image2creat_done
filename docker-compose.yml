@@ -1,4 +1,6 @@
-# Local stack: MySQL + chatgpt2api (free upstream) + GPT Image Studio.
+# Local stack: MySQL + chatgpt2api (free upstream, built from vendored source)
+# + GPT Image Studio.
+#
 # Usage:
 #   1. cp .env.example .env  (and edit secrets)
 #   2. docker compose up -d --build
@@ -8,6 +10,11 @@
 # (default auth-key: chatgpt2api) and add at least one ChatGPT account.
 # Then no further config is needed in image2creat_done — its container is
 # already pointed at http://chatgpt2api:80/v1 with auth key `chatgpt2api`.
+#
+# chatgpt2api is vendored under vendor/chatgpt2api/ via `git subtree`.
+# To pull the latest upstream changes:
+#   git subtree pull --prefix=vendor/chatgpt2api \
+#     https://github.com/basketikun/chatgpt2api.git main --squash
 services:
   mysql:
     image: mysql:8.0
@@ -30,7 +37,10 @@ services:
       retries: 30
 
   chatgpt2api:
-    image: ghcr.io/basketikun/chatgpt2api:latest
+    build:
+      context: ./vendor/chatgpt2api
+      dockerfile: Dockerfile
+    image: gpt-image-chatgpt2api:local
     container_name: gpt-image-chatgpt2api
     restart: unless-stopped
     environment:
