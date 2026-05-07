@@ -1,0 +1,83 @@
+# Local stack: MySQL + chatgpt2api (free upstream) + GPT Image Studio.
+# Usage:
+#   1. cp .env.example .env  (and edit secrets)
+#   2. docker compose up -d --build
+#   3. open http://localhost:3000
+#
+# After the stack is up, sign in to chatgpt2api at http://localhost:8080/admin
+# (default auth-key: chatgpt2api) and add at least one ChatGPT account.
+# Then no further config is needed in image2creat_done — its container is
+# already pointed at http://chatgpt2api:80/v1 with auth key `chatgpt2api`.
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: gpt-image-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gpt_image_studio}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  chatgpt2api:
+    image: ghcr.io/basketikun/chatgpt2api:latest
+    container_name: gpt-image-chatgpt2api
+    restart: unless-stopped
+    environment:
+      STORAGE_BACKEND: json
+      CHATGPT2API_AUTH_KEY: ${CHATGPT2API_AUTH_KEY:-chatgpt2api}
+    ports:
+      - "8080:80"
+    volumes:
+      - chatgpt2api-data:/app/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gpt-image-studio:local
+    container_name: gpt-image-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      chatgpt2api:
+        condition: service_started
+    environment:
+      PORT: 3000
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gpt_image_studio}
+      MYSQL_CREATE_DATABASE: "true"
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-this-password}
+      ADMIN_NAME: ${ADMIN_NAME:-Admin}
+      AI_API_BASE_URL: http://chatgpt2api:80/v1
+      AI_API_KEY: ${CHATGPT2API_AUTH_KEY:-chatgpt2api}
+      IMAGE_MODEL: ${IMAGE_MODEL:-gpt-4o-image}
+      DEFAULT_CREDITS: ${DEFAULT_CREDITS:-10}
+      GENERATION_CREDIT_COST: ${GENERATION_CREDIT_COST:-1}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      REQUIRE_APPROVAL: ${REQUIRE_APPROVAL:-false}
+      MAX_IMAGES_PER_REQUEST: ${MAX_IMAGES_PER_REQUEST:-1}
+    ports:
+      - "3000:3000"
+    volumes:
+      - app-generated:/app/data/generated
+
+volumes:
+  mysql-data:
+  chatgpt2api-data:
+  app-generated:

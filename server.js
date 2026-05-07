@@ -778,9 +778,121 @@ async function routeApi(req, res, url) {
     let user = await store.updateUser(target.id, patch);
     if (body.creditDelta !== undefined) {
       const delta = Math.max(-100000, Math.min(100000, Number.parseInt(body.creditDelta, 10) || 0));
-      user = await store.adjustCredits(target.id, delta);
+      user = await store.adjustCredits(target.id, delta, {
+        type: "admin_adjust",
+        refType: "admin",
+        refId: current.user.id,
+        note: `Admin adjust by ${current.user.email}`
+      });
     }
     return sendJson(res, 200, { user: serializeUser(user) });
+  }
+
+  // -------------------------------------------------------------------------
+  // Redeem codes / credit history (user-facing)
+  // -------------------------------------------------------------------------
+  if (req.method === "POST" && url.pathname === "/api/redeem") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    const body = await readJsonBody(req);
+    const rawCode = String(body.code || "").trim();
+    if (!rawCode) throw httpError("Please enter a redeem code", 400);
+    if (rawCode.length > 64) throw httpError("Redeem code is invalid", 400);
+
+    const result = await store.redeemCode(rawCode, current.user.id);
+    if (!result.ok) {
+      const errorMap = {
+        code_invalid: { status: 400, message: "Redeem code is invalid" },
+        code_not_found: { status: 404, message: "Redeem code not found" },
+        code_used: { status: 409, message: "Redeem code has already been used" },
+        code_disabled: { status: 410, message: "Redeem code has been disabled" },
+        code_expired: { status: 410, message: "Redeem code has expired" },
+        user_not_found: { status: 401, message: "Please sign in again" }
+      };
+      const mapped = errorMap[result.error] || { status: 400, message: "Redeem failed" };
+      throw httpError(mapped.message, mapped.status, { code: result.error });
+    }
+    return sendJson(res, 200, {
+      credits: result.balanceAfter,
+      added: result.credits,
+      code: result.code
+    });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/credits/history") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    const limit = sanitizePositiveInt(url.searchParams.get("limit"), 50, 200);
+    const transactions = await store.listCreditTransactionsForUser(current.user.id, limit);
+    return sendJson(res, 200, { transactions });
+  }
+
+  // -------------------------------------------------------------------------
+  // Admin: redeem code management
+  // -------------------------------------------------------------------------
+  if (req.method === "POST" && url.pathname === "/api/admin/redeem-codes") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    const body = await readJsonBody(req);
+    const count = sanitizePositiveInt(body.count, 1, 1000);
+    const credits = sanitizePositiveInt(body.credits, 1, 100000);
+    let expiresAt = null;
+    if (body.expiresInDays !== undefined && body.expiresInDays !== null && body.expiresInDays !== "") {
+      const days = sanitizePositiveInt(body.expiresInDays, 0, 3650);
+      if (days > 0) expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    } else if (body.expiresAt) {
+      const parsed = new Date(body.expiresAt);
+      if (!Number.isNaN(parsed.getTime())) expiresAt = parsed;
+    }
+    const note = body.note ? String(body.note).slice(0, 255) : "";
+    const result = await store.createRedeemCodes({
+      count,
+      credits,
+      expiresAt,
+      note,
+      createdByUserId: current.user.id
+    });
+    return sendJson(res, 200, result);
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/admin/redeem-codes") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    const status = url.searchParams.get("status") || undefined;
+    const batchId = url.searchParams.get("batchId") || undefined;
+    const limit = sanitizePositiveInt(url.searchParams.get("limit"), 200, 2000);
+    const codes = await store.listRedeemCodes({ status, batchId, limit });
+    return sendJson(res, 200, { codes });
+  }
+
+  const disableCodeMatch = url.pathname.match(/^\/api\/admin\/redeem-codes\/([^/]+)\/disable$/);
+  if (disableCodeMatch && req.method === "POST") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    await store.disableRedeemCode(disableCodeMatch[1]);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/admin/credit-transactions") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    const limit = sanitizePositiveInt(url.searchParams.get("limit"), 200, 2000);
+    const transactions = await store.listAllCreditTransactions(limit);
+    return sendJson(res, 200, { transactions });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/admin/payments") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    const status = url.searchParams.get("status") || undefined;
+    const limit = sanitizePositiveInt(url.searchParams.get("limit"), 200, 2000);
+    const payments = await store.listPayments({ status, limit });
+    return sendJson(res, 200, { payments });
   }
 
   if (req.method === "GET" && url.pathname === "/api/images/history") {
@@ -855,7 +967,12 @@ async function routeApi(req, res, url) {
 
     let reservedCredits = false;
     if (totalCost > 0) {
-      reservedCredits = await store.reserveCredits(user.id, totalCost);
+      reservedCredits = await store.reserveCredits(user.id, totalCost, {
+        type: "consume_generate",
+        refType: "generation_request",
+        refId: auditId,
+        note: "Image generation"
+      });
       if (!reservedCredits) {
         await store.updateGenerationRequest(auditId, {
           status: "failed",
@@ -879,7 +996,12 @@ async function routeApi(req, res, url) {
       });
       reservedCredits = false;
       if (costPerImage > 0 && saved.length < n) {
-        await store.addCredits(user.id, costPerImage * (n - saved.length)).catch((error) => console.error(error));
+        await store.addCredits(user.id, costPerImage * (n - saved.length), {
+          type: "refund_partial",
+          refType: "generation_request",
+          refId: auditId,
+          note: `Partial refund: ${n - saved.length} of ${n} images missing`
+        }).catch((error) => console.error(error));
       }
 
       return sendJson(res, 200, {
@@ -888,7 +1010,14 @@ async function routeApi(req, res, url) {
         generationCost: costPerImage
       });
     } catch (error) {
-      if (reservedCredits) await store.addCredits(user.id, totalCost).catch((refundError) => console.error(refundError));
+      if (reservedCredits) {
+        await store.addCredits(user.id, totalCost, {
+          type: "refund_failure",
+          refType: "generation_request",
+          refId: auditId,
+          note: "Refund: generation failed"
+        }).catch((refundError) => console.error(refundError));
+      }
       await store.updateGenerationRequest(auditId, {
         status: "failed",
         errorMessage: String(error.message || error).slice(0, 2000)
@@ -944,7 +1073,12 @@ async function routeApi(req, res, url) {
 
     let reservedCredits = false;
     if (costPerImage > 0) {
-      reservedCredits = await store.reserveCredits(user.id, costPerImage);
+      reservedCredits = await store.reserveCredits(user.id, costPerImage, {
+        type: "consume_edit",
+        refType: "generation_request",
+        refId: auditId,
+        note: "Image edit"
+      });
       if (!reservedCredits) {
         await store.updateGenerationRequest(auditId, {
           status: "failed",
@@ -985,7 +1119,14 @@ async function routeApi(req, res, url) {
         generationCost: costPerImage
       });
     } catch (error) {
-      if (reservedCredits) await store.addCredits(user.id, costPerImage).catch((refundError) => console.error(refundError));
+      if (reservedCredits) {
+        await store.addCredits(user.id, costPerImage, {
+          type: "refund_failure",
+          refType: "generation_request",
+          refId: auditId,
+          note: "Refund: edit failed"
+        }).catch((refundError) => console.error(refundError));
+      }
       await store.updateGenerationRequest(auditId, {
         status: "failed",
         errorMessage: String(error.message || error).slice(0, 2000)

@@ -17,6 +17,10 @@
 - 支持参考图上传预览、图片编辑、矩形/画笔标注区域后重新生成
 - 支持常用比例、2K、4K 和自定义尺寸
 - MySQL 持久化用户、设置、积分、生成记录和审计日志
+- **积分流水（credit ledger）**：注册赠送、签到、生成、退款、卡密充值、管理员调整全部记录
+- **生成事务回滚**：上游 API 调用失败时自动退还积分，无需人工修复
+- **卡密兑换系统**：管理员后台批量生成卡密，用户输入卡密即可获得积分（活动赠送、VIP 内测等场景）
+- **payments 表**：已预置支付订单结构，后续可平滑接入支付宝当面付 / 易支付 / 虎皮椒 / Stripe
   ##图片预览
 ![GitHub图像](/output/screencapture-38-22-89-219-3456-2026-04-30-14_03_52.png)
 ![GitHub图像](output/screencapture-38-22-89-219-3456-2026-04-30-14_04_22.png)
@@ -31,9 +35,35 @@
 
 ## Quick Start
 
+### 方式 A：Docker Compose（推荐 — 一键起 MySQL + chatgpt2api 免费上游 + 网站）
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+启动后会暴露三个服务：
+
+| 服务 | 端口 | 说明 |
+| --- | --- | --- |
+| `app`（生图站） | http://localhost:3000 | 用户访问入口 |
+| `chatgpt2api`（上游） | http://localhost:8080 | 在 `/admin` 添加 ChatGPT 账号即可提供生图能力 |
+| `mysql` | 3306 | 默认密码取自 `.env` 的 `MYSQL_PASSWORD` |
+
+首次启动后：
+
+1. 打开 http://localhost:8080/admin，输入 `.env` 里的 `CHATGPT2API_AUTH_KEY`（默认 `chatgpt2api`）登录，然后添加至少一个 ChatGPT 账号（详见 [chatgpt2api 项目说明](https://github.com/basketikun/chatgpt2api)）。
+2. 打开 http://localhost:3000，使用 `.env` 里的管理员邮箱密码登录。
+3. 在管理员后台 → 接口设置中，把 `API 地址` 改为 `http://chatgpt2api:80/v1`、`API Key` 设为 `CHATGPT2API_AUTH_KEY`、`模型` 设为 `gpt-4o-image`（或 chatgpt2api 支持的模型名）。docker-compose 已经把这些通过环境变量预填了，正常情况下不需要手工配置。
+4. 注册一个普通账号，注册即送 10 积分，可以直接生图。
+
+> ⚠️ **chatgpt2api 仅适合免费体验档**：它是 ChatGPT 网页端逆向，作者明确禁止商业用途。一旦准备收费，请换成官方 OpenAI Images API、火山豆包、智谱 CogView 等合规上游。`payments` 表与 `provider` 字段已预留，方便后续接入。
+
+### 方式 B：仅本地 Node.js（你已经有 MySQL 和 AI API）
+
 ```bash
 npm install
-copy .env.example .env
+cp .env.example .env   # Windows: copy .env.example .env
 node server.js
 ```
 
@@ -109,6 +139,26 @@ mysql -u root -p < database/schema.sql
 3. 在「接口设置」里填写 API 地址、API Key、模型、注册送积分、生成扣费积分等配置。
 4. 在「用户管理」里启用/禁用用户、调整积分。
 5. 在「生图记录」里查看提示词、IP、浏览器和错误信息，便于内容安全排查。
+6. 在「卡密管理」里批量生成卡密：填写数量、每张积分、有效期，点「生成卡密」即可一次性产出。**卡密文本只在生成的当下显示一次**，请用「一键复制」或「下载 .txt」保存好。
+7. 在「积分流水」里追踪每一笔积分变动；在「支付订单」里查看充值订单（PR 2 接入支付后）。
+
+## Credit System
+
+每一笔积分变动都会写入 `credit_transactions` 表，前台和后台都能查询：
+
+| 类型 | 触发场景 |
+| --- | --- |
+| `register_bonus` | 用户注册赠送积分 |
+| `checkin` | 每日签到 |
+| `consume_generate` | 文生图扣费 |
+| `consume_edit` | 图片编辑扣费 |
+| `refund_failure` | 上游 API 调用失败时自动退还 |
+| `refund_partial` | 部分图片生成失败的部分退款 |
+| `topup_redeem` | 卡密兑换 |
+| `topup_payment` | 充值订单到账（PR 2） |
+| `admin_adjust` | 管理员手动加减积分 |
+
+生成接口（`/api/images/generate`、`/api/images/edit`）已用 MySQL 事务包裹：先 `SELECT ... FOR UPDATE` 锁定用户行 → 扣减积分 → 调用上游 → 失败则回滚并自动退积分。
 
 ## API Compatibility
 
@@ -161,6 +211,8 @@ node scripts/smoke-test.js
 ├── scripts/            # Local helper scripts and smoke tests
 ├── src/                # MySQL store and shared server helpers
 ├── server.js           # HTTP server and API routes
+├── Dockerfile          # Production-friendly Node.js image
+├── docker-compose.yml  # MySQL + chatgpt2api + app one-shot stack
 ├── .env.example        # Safe environment template
 └── README.md
 ```

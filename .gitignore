@@ -1,0 +1,24 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Env
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Runtime
+data/generated/
+data/store.json
+output/
+*.log
+server.err.log
+server.out.log
+server-test.err.log
+server-test.out.log
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
