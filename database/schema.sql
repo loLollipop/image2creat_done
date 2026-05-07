@@ -101,6 +101,73 @@ CREATE TABLE IF NOT EXISTS generation_requests (
   CONSTRAINT fk_generation_requests_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ----------------------------------------------------------------------------
+-- Credit ledger: every credit movement (topup, consume, refund, checkin,
+-- admin adjust, register bonus) is recorded so balances are auditable.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS credit_transactions (
+  id VARCHAR(32) NOT NULL PRIMARY KEY,
+  user_id VARCHAR(32) NOT NULL,
+  type VARCHAR(32) NOT NULL,
+  delta INT NOT NULL,
+  balance_after INT UNSIGNED NOT NULL,
+  ref_type VARCHAR(32) NULL,
+  ref_id VARCHAR(64) NULL,
+  note VARCHAR(255) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_credit_tx_user_created (user_id, created_at),
+  INDEX idx_credit_tx_type (type),
+  INDEX idx_credit_tx_ref (ref_type, ref_id),
+  CONSTRAINT fk_credit_tx_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- Redeem codes (卡密). Admins generate batches; users redeem to top up credits.
+-- Atomic redemption ensures a single code can never be used twice.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS redeem_codes (
+  code VARCHAR(64) NOT NULL PRIMARY KEY,
+  credits INT UNSIGNED NOT NULL,
+  status VARCHAR(16) NOT NULL DEFAULT 'unused',
+  batch_id VARCHAR(32) NULL,
+  note VARCHAR(255) NULL,
+  expires_at DATETIME(3) NULL,
+  used_by_user_id VARCHAR(32) NULL,
+  used_at DATETIME(3) NULL,
+  created_by_user_id VARCHAR(32) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_redeem_codes_status (status),
+  INDEX idx_redeem_codes_batch (batch_id),
+  INDEX idx_redeem_codes_used_by (used_by_user_id),
+  CONSTRAINT fk_redeem_codes_used_by FOREIGN KEY (used_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- Payments: real-money topup orders. Filled in when integrating Yipay,
+-- Hupijiao, Stripe, etc. The schema is defined here so PR2 can wire up the
+-- callbacks without further migrations.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS payments (
+  id VARCHAR(32) NOT NULL PRIMARY KEY,
+  user_id VARCHAR(32) NOT NULL,
+  provider VARCHAR(32) NOT NULL,
+  provider_order_id VARCHAR(128) NULL,
+  amount_cents INT UNSIGNED NOT NULL,
+  currency VARCHAR(8) NOT NULL DEFAULT 'CNY',
+  credits INT UNSIGNED NOT NULL,
+  status VARCHAR(16) NOT NULL DEFAULT 'pending',
+  raw_payload LONGTEXT NULL,
+  ip_address VARCHAR(64) NULL,
+  user_agent VARCHAR(512) NULL,
+  paid_at DATETIME(3) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_payments_user_created (user_id, created_at),
+  INDEX idx_payments_status (status),
+  INDEX idx_payments_provider_order (provider, provider_order_id),
+  CONSTRAINT fk_payments_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 INSERT IGNORE INTO app_settings
   (id, openai_api_key, api_base_url, model, default_credits, generation_credit_cost, allow_registration, require_approval, max_images_per_request)
 VALUES

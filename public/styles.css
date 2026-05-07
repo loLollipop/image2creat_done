@@ -1722,6 +1722,87 @@ a {
   font-size: 13px;
 }
 
+.redeem-form {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 12px;
+  padding: 18px;
+  border: 1px solid #eceff3;
+  border-radius: 18px;
+  background: #fff;
+}
+
+.redeem-form h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #111;
+}
+
+.redeem-form p.muted {
+  margin: 0;
+  font-size: 12px;
+  color: #98a2b3;
+}
+
+.redeem-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.redeem-row input {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #d0d5dd;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  background: #f9fafb;
+}
+
+.credits-history-modal .credit-history-table-wrap {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid #eaecf0;
+  border-radius: 14px;
+  margin: 16px 0;
+}
+
+.credit-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.credit-history-table th,
+.credit-history-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #f1f3f5;
+}
+
+.credit-history-table th {
+  background: #f8fafc;
+  font-weight: 600;
+  color: #344054;
+  position: sticky;
+  top: 0;
+}
+
+.credit-history-table td.num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.credit-history-table td.num.pos {
+  color: #16a34a;
+}
+
+.credit-history-table td.num.neg {
+  color: #dc2626;
+}
+
 .package-card {
   border: 1px solid #eee;
   background: #f9f9f9;

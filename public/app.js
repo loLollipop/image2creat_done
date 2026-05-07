@@ -154,6 +154,13 @@ const i18n = {
     disabled: "停用",
     user: "用户",
     adminRole: "管理员",
+    redeemTitle: "卡密兑换",
+    redeemDesc: "输入卡密兑换积分（仅 A-Z 与 2-9，大小写不敏感，连字符可省略）",
+    redeemPlaceholder: "AAAA-AAAA-AAAA-AAAA",
+    redeemSubmit: "兑换",
+    redeemSuccess: "兑换成功",
+    redeemEmpty: "请输入卡密",
+    historyLink: "积分流水",
     funMsgs: [
       "正在调配完美的色彩...",
       "撒上一些像素灵感...",
@@ -272,6 +279,13 @@ const i18n = {
     disabled: "Disabled",
     user: "User",
     adminRole: "Admin",
+    redeemTitle: "Redeem Code",
+    redeemDesc: "Enter a redeem code to top up credits (uppercase letters and digits 2-9; dashes optional)",
+    redeemPlaceholder: "AAAA-AAAA-AAAA-AAAA",
+    redeemSubmit: "Redeem",
+    redeemSuccess: "Redeem successful",
+    redeemEmpty: "Please enter a redeem code",
+    historyLink: "Credit history",
     funMsgs: [
       "Mixing the perfect palette...",
       "Sprinkling pixel inspiration...",
@@ -1780,12 +1794,12 @@ function openCreditsModal() {
   const checkinCredit = Number(state.checkin?.credit || state.settings?.checkinCredit || 1);
   const generationCost = Number(state.settings?.generationCreditCost ?? 1);
   openModal(`
-    <section class="modal">
+    <section class="modal credits-modal">
       <button class="close-modal" type="button"><i class="ri-close-line"></i></button>
       <div class="modal-title">
         <i class="ri-sparkling-2-fill"></i>
         <h2>${text("creditsTitle")}</h2>
-        <p>${text("creditsBalance")}: <strong>${credits}</strong> · ${text("oneCredit")}: <strong>${generationCost}</strong></p>
+        <p>${text("creditsBalance")}: <strong data-credits-balance>${credits}</strong> · ${text("oneCredit")}: <strong>${generationCost}</strong></p>
       </div>
       <div class="checkin-card">
         <i class="ri-calendar-check-line"></i>
@@ -1795,11 +1809,145 @@ function openCreditsModal() {
       <button class="modal-primary" type="button" data-checkin ${checkedIn ? "disabled" : ""}>
         ${checkedIn ? text("checkedIn") : text("checkinToday")}
       </button>
+      <form class="redeem-form" data-redeem-form>
+        <h3>${text("redeemTitle")}</h3>
+        <p class="muted">${text("redeemDesc")}</p>
+        <div class="redeem-row">
+          <input data-redeem-input type="text" maxlength="64" autocomplete="off" placeholder="${escapeHtml(text("redeemPlaceholder"))}">
+          <button class="modal-primary" type="submit">${text("redeemSubmit")}</button>
+        </div>
+      </form>
+      <button class="modal-secondary" type="button" data-history>${text("historyLink")}</button>
       <button class="modal-secondary" type="button" data-close-auth>${text("close")}</button>
     </section>
   `);
   $("[data-checkin]", elements.modalLayer).addEventListener("click", submitCheckin);
+  $("[data-redeem-form]", elements.modalLayer).addEventListener("submit", submitRedeem);
+  $("[data-history]", elements.modalLayer).addEventListener("click", openCreditHistoryModal);
   $("[data-close-auth]", elements.modalLayer).addEventListener("click", closeModal);
+}
+
+async function submitRedeem(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const input = $("[data-redeem-input]", form);
+  const code = String(input?.value || "").trim();
+  if (!code) {
+    showToast(text("redeemEmpty"), "ri-error-warning-line");
+    return;
+  }
+  const button = form.querySelector("button[type='submit']");
+  if (button) button.disabled = true;
+  try {
+    const data = await api("/api/redeem", {
+      method: "POST",
+      body: JSON.stringify({ code })
+    });
+    state.user = { ...state.user, credits: data.credits };
+    updateNav();
+    showToast(`${text("redeemSuccess")} +${data.added}`, "ri-coin-line");
+    if (input) input.value = "";
+    const balanceNode = $("[data-credits-balance]", elements.modalLayer);
+    if (balanceNode) balanceNode.textContent = String(data.credits);
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function openCreditHistoryModal() {
+  if (!state.user) {
+    openAuthModal("login");
+    return;
+  }
+  let transactions = [];
+  try {
+    const data = await api("/api/credits/history?limit=100");
+    transactions = data.transactions || [];
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+    return;
+  }
+  const rows = transactions.length
+    ? transactions.map((tx) => `
+        <tr>
+          <td>${formatTransactionType(tx.type)}</td>
+          <td class="num ${tx.delta >= 0 ? "pos" : "neg"}">${tx.delta >= 0 ? "+" : ""}${tx.delta}</td>
+          <td class="num">${tx.balanceAfter}</td>
+          <td class="muted">${escapeHtml(tx.note || "")}</td>
+          <td class="muted">${escapeHtml(formatTimestamp(tx.createdAt))}</td>
+        </tr>
+      `).join("")
+    : `<tr><td colspan="5" class="muted">${state.lang === "zh" ? "暂无流水" : "No transactions yet"}</td></tr>`;
+  openModal(`
+    <section class="modal credits-history-modal">
+      <button class="close-modal" type="button"><i class="ri-close-line"></i></button>
+      <div class="modal-title">
+        <i class="ri-history-line"></i>
+        <h2>${text("historyLink")}</h2>
+      </div>
+      <div class="credit-history-table-wrap">
+        <table class="credit-history-table">
+          <thead>
+            <tr>
+              <th>${state.lang === "zh" ? "类型" : "Type"}</th>
+              <th>${state.lang === "zh" ? "变动" : "Δ"}</th>
+              <th>${state.lang === "zh" ? "余额" : "Balance"}</th>
+              <th>${state.lang === "zh" ? "备注" : "Note"}</th>
+              <th>${state.lang === "zh" ? "时间" : "Time"}</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <button class="modal-secondary" type="button" data-close-auth>${text("close")}</button>
+    </section>
+  `);
+  $("[data-close-auth]", elements.modalLayer).addEventListener("click", openCreditsModal);
+}
+
+function formatTransactionType(type) {
+  const labelsZh = {
+    register_bonus: "注册赠送",
+    checkin: "签到",
+    consume_generate: "生图消耗",
+    consume_edit: "编辑消耗",
+    consume: "消耗",
+    refund_failure: "失败退款",
+    refund_partial: "部分退款",
+    topup_redeem: "卡密充值",
+    topup_payment: "支付充值",
+    admin_adjust: "管理员调整",
+    credit: "积分变动"
+  };
+  const labelsEn = {
+    register_bonus: "Signup bonus",
+    checkin: "Check-in",
+    consume_generate: "Image generate",
+    consume_edit: "Image edit",
+    consume: "Consume",
+    refund_failure: "Refund (failure)",
+    refund_partial: "Refund (partial)",
+    topup_redeem: "Redeem code",
+    topup_payment: "Payment",
+    admin_adjust: "Admin adjust",
+    credit: "Credit change"
+  };
+  const map = state.lang === "zh" ? labelsZh : labelsEn;
+  return escapeHtml(map[type] || type);
+}
+
+function formatTimestamp(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat(state.lang === "zh" ? "zh-CN" : "en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(d);
 }
 
 async function submitCheckin(event) {

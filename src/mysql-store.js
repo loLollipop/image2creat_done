@@ -5,8 +5,33 @@ try {
   throw new Error("Missing dependency mysql2. Run: npm.cmd install");
 }
 
+const crypto = require("crypto");
+
 let pool;
 let defaultModel = "GPT-IMAGE-2";
+
+function newId(prefix = "") {
+  return `${prefix}${crypto.randomBytes(12).toString("hex")}`;
+}
+
+async function recordCreditTransaction(connection, entry) {
+  await connection.execute(
+    `INSERT INTO credit_transactions
+       (id, user_id, type, delta, balance_after, ref_type, ref_id, note, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      entry.id || newId("tx_"),
+      entry.userId,
+      entry.type,
+      entry.delta,
+      Math.max(0, Number(entry.balanceAfter) || 0),
+      entry.refType || null,
+      entry.refId || null,
+      entry.note ? String(entry.note).slice(0, 255) : null,
+      entry.createdAt || new Date()
+    ]
+  );
+}
 
 function intEnv(name, fallback) {
   const parsed = Number.parseInt(process.env[name], 10);
@@ -281,6 +306,66 @@ async function runMigrations() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS credit_transactions (
+      id VARCHAR(32) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(32) NOT NULL,
+      type VARCHAR(32) NOT NULL,
+      delta INT NOT NULL,
+      balance_after INT UNSIGNED NOT NULL,
+      ref_type VARCHAR(32) NULL,
+      ref_id VARCHAR(64) NULL,
+      note VARCHAR(255) NULL,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      INDEX idx_credit_tx_user_created (user_id, created_at),
+      INDEX idx_credit_tx_type (type),
+      INDEX idx_credit_tx_ref (ref_type, ref_id),
+      CONSTRAINT fk_credit_tx_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS redeem_codes (
+      code VARCHAR(64) NOT NULL PRIMARY KEY,
+      credits INT UNSIGNED NOT NULL,
+      status VARCHAR(16) NOT NULL DEFAULT 'unused',
+      batch_id VARCHAR(32) NULL,
+      note VARCHAR(255) NULL,
+      expires_at DATETIME(3) NULL,
+      used_by_user_id VARCHAR(32) NULL,
+      used_at DATETIME(3) NULL,
+      created_by_user_id VARCHAR(32) NULL,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      INDEX idx_redeem_codes_status (status),
+      INDEX idx_redeem_codes_batch (batch_id),
+      INDEX idx_redeem_codes_used_by (used_by_user_id),
+      CONSTRAINT fk_redeem_codes_used_by FOREIGN KEY (used_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS payments (
+      id VARCHAR(32) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(32) NOT NULL,
+      provider VARCHAR(32) NOT NULL,
+      provider_order_id VARCHAR(128) NULL,
+      amount_cents INT UNSIGNED NOT NULL,
+      currency VARCHAR(8) NOT NULL DEFAULT 'CNY',
+      credits INT UNSIGNED NOT NULL,
+      status VARCHAR(16) NOT NULL DEFAULT 'pending',
+      raw_payload LONGTEXT NULL,
+      ip_address VARCHAR(64) NULL,
+      user_agent VARCHAR(512) NULL,
+      paid_at DATETIME(3) NULL,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      INDEX idx_payments_user_created (user_id, created_at),
+      INDEX idx_payments_status (status),
+      INDEX idx_payments_provider_order (provider, provider_order_id),
+      CONSTRAINT fk_payments_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
   await db.execute(
     `INSERT IGNORE INTO app_settings
       (id, openai_api_key, api_base_url, model, default_credits, generation_credit_cost, allow_registration, require_approval, max_images_per_request)
@@ -379,24 +464,46 @@ async function getUserById(id) {
 
 async function createUser(user) {
   const createdAt = new Date();
-  await getPool().execute(
-    `INSERT INTO users
-      (id, name, email, password_salt, password_iterations, password_hash, role, status, credits, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      user.id,
-      user.name,
-      user.email,
-      user.passwordHash.salt,
-      user.passwordHash.iterations,
-      user.passwordHash.hash,
-      user.role,
-      user.status,
-      user.credits,
-      createdAt,
-      createdAt
-    ]
-  );
+  const connection = await getPool().getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute(
+      `INSERT INTO users
+        (id, name, email, password_salt, password_iterations, password_hash, role, status, credits, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        user.id,
+        user.name,
+        user.email,
+        user.passwordHash.salt,
+        user.passwordHash.iterations,
+        user.passwordHash.hash,
+        user.role,
+        user.status,
+        user.credits,
+        createdAt,
+        createdAt
+      ]
+    );
+    if (Number(user.credits) > 0) {
+      await recordCreditTransaction(connection, {
+        userId: user.id,
+        type: "register_bonus",
+        delta: Number(user.credits),
+        balanceAfter: Number(user.credits),
+        refType: "user",
+        refId: user.id,
+        note: "Signup bonus credits",
+        createdAt
+      });
+    }
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback().catch(() => null);
+    throw error;
+  } finally {
+    connection.release();
+  }
   return getUserById(user.id);
 }
 
@@ -430,34 +537,121 @@ async function updateUser(id, patch) {
   return getUserById(id);
 }
 
-async function reserveCredits(userId, amount) {
-  const [result] = await getPool().execute(
-    "UPDATE users SET credits = credits - ?, updated_at = ? WHERE id = ? AND credits >= ?",
-    [amount, new Date(), userId, amount]
-  );
-  return result.affectedRows === 1;
+async function reserveCredits(userId, amount, meta = {}) {
+  const value = Number(amount) || 0;
+  if (value <= 0) return true;
+  const connection = await getPool().getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      "SELECT credits FROM users WHERE id = ? FOR UPDATE",
+      [userId]
+    );
+    if (!rows.length || Number(rows[0].credits) < value) {
+      await connection.rollback();
+      return false;
+    }
+    const balanceAfter = Number(rows[0].credits) - value;
+    await connection.execute(
+      "UPDATE users SET credits = ?, updated_at = ? WHERE id = ?",
+      [balanceAfter, new Date(), userId]
+    );
+    await recordCreditTransaction(connection, {
+      userId,
+      type: meta.type || "consume",
+      delta: -value,
+      balanceAfter,
+      refType: meta.refType,
+      refId: meta.refId,
+      note: meta.note
+    });
+    await connection.commit();
+    return true;
+  } catch (error) {
+    await connection.rollback().catch(() => null);
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
-async function addCredits(userId, amount) {
-  if (amount <= 0) return;
-  await getPool().execute("UPDATE users SET credits = credits + ?, updated_at = ? WHERE id = ?", [
-    amount,
-    new Date(),
-    userId
-  ]);
+async function addCredits(userId, amount, meta = {}) {
+  const value = Number(amount) || 0;
+  if (value <= 0) return 0;
+  const connection = await getPool().getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      "SELECT credits FROM users WHERE id = ? FOR UPDATE",
+      [userId]
+    );
+    if (!rows.length) {
+      await connection.rollback();
+      return 0;
+    }
+    const balanceAfter = Number(rows[0].credits) + value;
+    await connection.execute(
+      "UPDATE users SET credits = ?, updated_at = ? WHERE id = ?",
+      [balanceAfter, new Date(), userId]
+    );
+    await recordCreditTransaction(connection, {
+      userId,
+      type: meta.type || "credit",
+      delta: value,
+      balanceAfter,
+      refType: meta.refType,
+      refId: meta.refId,
+      note: meta.note
+    });
+    await connection.commit();
+    return balanceAfter;
+  } catch (error) {
+    await connection.rollback().catch(() => null);
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
-async function adjustCredits(userId, delta) {
+async function adjustCredits(userId, delta, meta = {}) {
   const amount = Number(delta) || 0;
   if (!amount) return getUserById(userId);
   if (amount > 0) {
-    await addCredits(userId, amount);
+    await addCredits(userId, amount, { type: "admin_adjust", ...meta });
   } else {
     const deduction = Math.abs(amount);
-    await getPool().execute(
-      "UPDATE users SET credits = IF(credits < ?, 0, credits - ?), updated_at = ? WHERE id = ?",
-      [deduction, deduction, new Date(), userId]
-    );
+    const connection = await getPool().getConnection();
+    try {
+      await connection.beginTransaction();
+      const [rows] = await connection.execute(
+        "SELECT credits FROM users WHERE id = ? FOR UPDATE",
+        [userId]
+      );
+      const current = Number(rows[0]?.credits || 0);
+      const actual = Math.min(deduction, current);
+      const balanceAfter = current - actual;
+      await connection.execute(
+        "UPDATE users SET credits = ?, updated_at = ? WHERE id = ?",
+        [balanceAfter, new Date(), userId]
+      );
+      if (actual > 0) {
+        await recordCreditTransaction(connection, {
+          userId,
+          type: meta.type || "admin_adjust",
+          delta: -actual,
+          balanceAfter,
+          refType: meta.refType,
+          refId: meta.refId,
+          note: meta.note
+        });
+      }
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback().catch(() => null);
+      throw error;
+    } finally {
+      connection.release();
+    }
   }
   return getUserById(userId);
 }
@@ -484,14 +678,26 @@ async function checkInToday(userId, creditAmount = 1) {
       await connection.rollback();
       return { checkedIn: false, credits: Number(rows[0]?.credits || 0) };
     }
-    await connection.execute("UPDATE users SET credits = credits + ?, updated_at = ? WHERE id = ?", [
-      amount,
-      new Date(),
-      userId
-    ]);
-    const [rows] = await connection.execute("SELECT credits FROM users WHERE id = ? LIMIT 1", [userId]);
+    const [userRows] = await connection.execute(
+      "SELECT credits FROM users WHERE id = ? FOR UPDATE",
+      [userId]
+    );
+    const balanceAfter = Number(userRows[0]?.credits || 0) + amount;
+    await connection.execute(
+      "UPDATE users SET credits = ?, updated_at = ? WHERE id = ?",
+      [balanceAfter, new Date(), userId]
+    );
+    await recordCreditTransaction(connection, {
+      userId,
+      type: "checkin",
+      delta: amount,
+      balanceAfter,
+      refType: "checkin_date",
+      refId: new Date().toISOString().slice(0, 10),
+      note: "Daily check-in bonus"
+    });
     await connection.commit();
-    return { checkedIn: true, credits: Number(rows[0]?.credits || 0) };
+    return { checkedIn: true, credits: balanceAfter };
   } catch (error) {
     await connection.rollback();
     throw error;
@@ -717,6 +923,373 @@ async function countTodayGenerations() {
   return Number(rows[0]?.count || 0);
 }
 
+// ----------------------------------------------------------------------------
+// Credit transactions (ledger)
+// ----------------------------------------------------------------------------
+
+function mapCreditTransaction(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    userName: row.user_name || "",
+    userEmail: row.user_email || "",
+    type: row.type,
+    delta: Number(row.delta || 0),
+    balanceAfter: Number(row.balance_after || 0),
+    refType: row.ref_type || "",
+    refId: row.ref_id || "",
+    note: row.note || "",
+    createdAt: toIso(row.created_at)
+  };
+}
+
+async function listCreditTransactionsForUser(userId, limit = 50) {
+  const normalizedLimit = Math.max(1, Math.min(500, Number(limit) || 50));
+  const [rows] = await getPool().execute(
+    `SELECT * FROM credit_transactions
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT ${normalizedLimit}`,
+    [userId]
+  );
+  return rows.map(mapCreditTransaction);
+}
+
+async function listAllCreditTransactions(limit = 200) {
+  const normalizedLimit = Math.max(1, Math.min(2000, Number(limit) || 200));
+  const [rows] = await getPool().execute(
+    `SELECT t.*, u.name AS user_name, u.email AS user_email
+       FROM credit_transactions t
+       LEFT JOIN users u ON u.id = t.user_id
+       ORDER BY t.created_at DESC
+       LIMIT ${normalizedLimit}`
+  );
+  return rows.map(mapCreditTransaction);
+}
+
+// ----------------------------------------------------------------------------
+// Redeem codes
+// ----------------------------------------------------------------------------
+
+function mapRedeemCode(row) {
+  if (!row) return null;
+  return {
+    code: row.code,
+    credits: Number(row.credits || 0),
+    status: row.status,
+    batchId: row.batch_id || "",
+    note: row.note || "",
+    expiresAt: toIso(row.expires_at),
+    usedByUserId: row.used_by_user_id || "",
+    usedByUserEmail: row.used_by_user_email || "",
+    usedAt: toIso(row.used_at),
+    createdByUserId: row.created_by_user_id || "",
+    createdAt: toIso(row.created_at)
+  };
+}
+
+const REDEEM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function generateRedeemCode(length = 16) {
+  const buffer = crypto.randomBytes(length);
+  const chars = new Array(length);
+  for (let i = 0; i < length; i += 1) {
+    chars[i] = REDEEM_CODE_ALPHABET[buffer[i] % REDEEM_CODE_ALPHABET.length];
+  }
+  // Format like AAAA-AAAA-AAAA-AAAA for readability.
+  const segments = [];
+  for (let i = 0; i < chars.length; i += 4) {
+    segments.push(chars.slice(i, i + 4).join(""));
+  }
+  return segments.join("-");
+}
+
+async function createRedeemCodes({ count, credits, expiresAt, note, createdByUserId }) {
+  const total = Math.max(1, Math.min(1000, Number(count) || 1));
+  const credit = Math.max(1, Number(credits) || 1);
+  const batchId = newId("batch_");
+  const codes = [];
+  const connection = await getPool().getConnection();
+  try {
+    await connection.beginTransaction();
+    while (codes.length < total) {
+      const candidate = generateRedeemCode(16);
+      try {
+        await connection.execute(
+          `INSERT INTO redeem_codes
+             (code, credits, status, batch_id, note, expires_at, created_by_user_id, created_at)
+           VALUES (?, ?, 'unused', ?, ?, ?, ?, ?)`,
+          [
+            candidate,
+            credit,
+            batchId,
+            note ? String(note).slice(0, 255) : null,
+            expiresAt ? new Date(expiresAt) : null,
+            createdByUserId || null,
+            new Date()
+          ]
+        );
+        codes.push(candidate);
+      } catch (error) {
+        if (error?.code === "ER_DUP_ENTRY") continue;
+        throw error;
+      }
+    }
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback().catch(() => null);
+    throw error;
+  } finally {
+    connection.release();
+  }
+  return { batchId, codes, credits: credit };
+}
+
+async function listRedeemCodes({ status, batchId, limit = 200 } = {}) {
+  const filters = [];
+  const params = [];
+  if (status) {
+    filters.push("rc.status = ?");
+    params.push(status);
+  }
+  if (batchId) {
+    filters.push("rc.batch_id = ?");
+    params.push(batchId);
+  }
+  const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  const normalizedLimit = Math.max(1, Math.min(2000, Number(limit) || 200));
+  const [rows] = await getPool().execute(
+    `SELECT rc.*, u.email AS used_by_user_email
+       FROM redeem_codes rc
+       LEFT JOIN users u ON u.id = rc.used_by_user_id
+       ${where}
+       ORDER BY rc.created_at DESC
+       LIMIT ${normalizedLimit}`,
+    params
+  );
+  return rows.map(mapRedeemCode);
+}
+
+async function disableRedeemCode(code) {
+  await getPool().execute(
+    "UPDATE redeem_codes SET status = 'disabled' WHERE code = ? AND status = 'unused'",
+    [code]
+  );
+}
+
+async function redeemCode(rawCode, userId) {
+  const code = String(rawCode || "").trim().toUpperCase();
+  if (!code) {
+    return { ok: false, error: "code_invalid" };
+  }
+  const connection = await getPool().getConnection();
+  try {
+    await connection.beginTransaction();
+    const [codeRows] = await connection.execute(
+      "SELECT * FROM redeem_codes WHERE code = ? FOR UPDATE",
+      [code]
+    );
+    if (!codeRows.length) {
+      await connection.rollback();
+      return { ok: false, error: "code_not_found" };
+    }
+    const row = codeRows[0];
+    if (row.status === "used") {
+      await connection.rollback();
+      return { ok: false, error: "code_used" };
+    }
+    if (row.status === "disabled") {
+      await connection.rollback();
+      return { ok: false, error: "code_disabled" };
+    }
+    if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) {
+      await connection.rollback();
+      return { ok: false, error: "code_expired" };
+    }
+    const credits = Number(row.credits) || 0;
+    const [userRows] = await connection.execute(
+      "SELECT credits FROM users WHERE id = ? FOR UPDATE",
+      [userId]
+    );
+    if (!userRows.length) {
+      await connection.rollback();
+      return { ok: false, error: "user_not_found" };
+    }
+    const balanceAfter = Number(userRows[0].credits) + credits;
+    const now = new Date();
+    await connection.execute(
+      "UPDATE users SET credits = ?, updated_at = ? WHERE id = ?",
+      [balanceAfter, now, userId]
+    );
+    await connection.execute(
+      "UPDATE redeem_codes SET status = 'used', used_by_user_id = ?, used_at = ? WHERE code = ?",
+      [userId, now, code]
+    );
+    await recordCreditTransaction(connection, {
+      userId,
+      type: "topup_redeem",
+      delta: credits,
+      balanceAfter,
+      refType: "redeem_code",
+      refId: code,
+      note: row.note || "Redeem code topup",
+      createdAt: now
+    });
+    await connection.commit();
+    return { ok: true, credits, balanceAfter, code };
+  } catch (error) {
+    await connection.rollback().catch(() => null);
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Payments (skeleton: real provider integration lands in PR2)
+// ----------------------------------------------------------------------------
+
+function mapPayment(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    userEmail: row.user_email || "",
+    provider: row.provider,
+    providerOrderId: row.provider_order_id || "",
+    amountCents: Number(row.amount_cents || 0),
+    currency: row.currency || "CNY",
+    credits: Number(row.credits || 0),
+    status: row.status,
+    paidAt: toIso(row.paid_at),
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at)
+  };
+}
+
+async function createPayment({ userId, provider, amountCents, credits, ipAddress, userAgent }) {
+  const id = newId("pay_");
+  await getPool().execute(
+    `INSERT INTO payments
+       (id, user_id, provider, amount_cents, currency, credits, status, ip_address, user_agent, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'CNY', ?, 'pending', ?, ?, ?, ?)`,
+    [
+      id,
+      userId,
+      provider,
+      Math.max(0, Number(amountCents) || 0),
+      Math.max(0, Number(credits) || 0),
+      ipAddress || null,
+      userAgent ? String(userAgent).slice(0, 512) : null,
+      new Date(),
+      new Date()
+    ]
+  );
+  return getPaymentById(id);
+}
+
+async function getPaymentById(id) {
+  const [rows] = await getPool().execute(
+    `SELECT p.*, u.email AS user_email FROM payments p
+       LEFT JOIN users u ON u.id = p.user_id
+      WHERE p.id = ? LIMIT 1`,
+    [id]
+  );
+  return mapPayment(rows[0]);
+}
+
+async function listPayments({ status, limit = 200 } = {}) {
+  const filters = [];
+  const params = [];
+  if (status) {
+    filters.push("p.status = ?");
+    params.push(status);
+  }
+  const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  const normalizedLimit = Math.max(1, Math.min(2000, Number(limit) || 200));
+  const [rows] = await getPool().execute(
+    `SELECT p.*, u.email AS user_email FROM payments p
+       LEFT JOIN users u ON u.id = p.user_id
+       ${where}
+       ORDER BY p.created_at DESC
+       LIMIT ${normalizedLimit}`,
+    params
+  );
+  return rows.map(mapPayment);
+}
+
+async function markPaymentPaid({ paymentId, providerOrderId, rawPayload }) {
+  const connection = await getPool().getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      "SELECT * FROM payments WHERE id = ? FOR UPDATE",
+      [paymentId]
+    );
+    if (!rows.length) {
+      await connection.rollback();
+      return { ok: false, error: "payment_not_found" };
+    }
+    const payment = rows[0];
+    if (payment.status === "paid") {
+      await connection.rollback();
+      return { ok: true, alreadyPaid: true, payment: mapPayment(payment) };
+    }
+    if (payment.status !== "pending") {
+      await connection.rollback();
+      return { ok: false, error: "payment_status_invalid", status: payment.status };
+    }
+    const now = new Date();
+    await connection.execute(
+      `UPDATE payments
+          SET status = 'paid',
+              provider_order_id = ?,
+              raw_payload = ?,
+              paid_at = ?,
+              updated_at = ?
+        WHERE id = ?`,
+      [
+        providerOrderId || payment.provider_order_id || null,
+        rawPayload ? String(rawPayload).slice(0, 65000) : payment.raw_payload || null,
+        now,
+        now,
+        paymentId
+      ]
+    );
+    const credits = Number(payment.credits) || 0;
+    let balanceAfter = null;
+    if (credits > 0) {
+      const [userRows] = await connection.execute(
+        "SELECT credits FROM users WHERE id = ? FOR UPDATE",
+        [payment.user_id]
+      );
+      balanceAfter = Number(userRows[0]?.credits || 0) + credits;
+      await connection.execute(
+        "UPDATE users SET credits = ?, updated_at = ? WHERE id = ?",
+        [balanceAfter, now, payment.user_id]
+      );
+      await recordCreditTransaction(connection, {
+        userId: payment.user_id,
+        type: "topup_payment",
+        delta: credits,
+        balanceAfter,
+        refType: "payment",
+        refId: paymentId,
+        note: `${payment.provider} payment`,
+        createdAt: now
+      });
+    }
+    await connection.commit();
+    return { ok: true, payment: await getPaymentById(paymentId), balanceAfter };
+  } catch (error) {
+    await connection.rollback().catch(() => null);
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 module.exports = {
   initializeDatabase,
   getSettings,
@@ -748,5 +1321,15 @@ module.exports = {
   listGenerationsForUser,
   listPublicGenerations,
   getGenerationById,
-  countTodayGenerations
+  countTodayGenerations,
+  listCreditTransactionsForUser,
+  listAllCreditTransactions,
+  createRedeemCodes,
+  listRedeemCodes,
+  redeemCode,
+  disableRedeemCode,
+  createPayment,
+  getPaymentById,
+  listPayments,
+  markPaymentPaid
 };
