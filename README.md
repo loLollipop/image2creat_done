@@ -50,6 +50,8 @@ docker compose up -d --build
 | `chatgpt2api`（上游） | http://localhost:8080 | 在 `/admin` 添加 ChatGPT 账号即可提供生图能力 |
 | `mysql` | 3306 | 默认密码取自 `.env` 的 `MYSQL_PASSWORD` |
 
+`chatgpt2api` 服务的镜像由 [`vendor/chatgpt2api/`](vendor/chatgpt2api/) 中的源码本地构建，方便就地汉化、加埋点或调整逻辑（详见 [Vendored Upstream](#vendored-upstream-chatgpt2api)）。
+
 首次启动后：
 
 1. 打开 http://localhost:8080/admin，输入 `.env` 里的 `CHATGPT2API_AUTH_KEY`（默认 `chatgpt2api`）登录，然后添加至少一个 ChatGPT 账号（详见 [chatgpt2api 项目说明](https://github.com/basketikun/chatgpt2api)）。
@@ -160,6 +162,34 @@ mysql -u root -p < database/schema.sql
 
 生成接口（`/api/images/generate`、`/api/images/edit`）已用 MySQL 事务包裹：先 `SELECT ... FOR UPDATE` 锁定用户行 → 扣减积分 → 调用上游 → 失败则回滚并自动退积分。
 
+## Vendored Upstream: chatgpt2api
+
+我们把 [`basketikun/chatgpt2api`](https://github.com/basketikun/chatgpt2api) 通过 `git subtree --squash` 合并到本仓库 [`vendor/chatgpt2api/`](vendor/chatgpt2api/) 子目录中。这样：
+
+- `git clone` 就一次性拿到所有代码，不需要 `git submodule init`。
+- 你可以**直接修改** `vendor/chatgpt2api/` 下的任何文件（汉化、加埋点、调 UI 等），改动会随我们仓库的提交一起走。
+- `docker-compose.yml` 中的 `chatgpt2api` 服务从该目录**本地构建镜像**，不再拉远端 ghcr 镜像，所以你的本地修改改完 `docker compose up -d --build` 就会生效。
+
+### 同步上游更新
+
+```bash
+git subtree pull --prefix=vendor/chatgpt2api \
+  https://github.com/basketikun/chatgpt2api.git main --squash
+```
+
+如果你本地改过 `vendor/chatgpt2api/` 里的文件，pull 时可能产生 merge 冲突，按普通 git 冲突解决即可。
+
+### 把本地修改贡献回上游（可选）
+
+```bash
+git subtree push --prefix=vendor/chatgpt2api \
+  https://github.com/<your-fork>/chatgpt2api.git <your-branch>
+```
+
+### License
+
+`vendor/chatgpt2api/` 维持其原始 [`MIT License`](vendor/chatgpt2api/LICENSE)（Copyright (c) kunkun）。原作者在 README 中明确禁止将逆向后的 ChatGPT 接口用于商业用途；本项目遵守这一点，仅将 chatgpt2api 用作**免费体验上游**，正式付费档必须切换到官方 OpenAI Images API 或国内合规渠道（火山豆包 / 智谱 CogView / 通义万相 等）。
+
 ## API Compatibility
 
 图片生成默认请求：
@@ -213,6 +243,8 @@ node scripts/smoke-test.js
 ├── server.js           # HTTP server and API routes
 ├── Dockerfile          # Production-friendly Node.js image
 ├── docker-compose.yml  # MySQL + chatgpt2api + app one-shot stack
+├── vendor/
+│   └── chatgpt2api/    # Vendored upstream (MIT) via git subtree
 ├── .env.example        # Safe environment template
 └── README.md
 ```
