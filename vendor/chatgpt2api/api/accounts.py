@@ -23,6 +23,17 @@ from services.sub2api_service import (
 )
 
 
+def _sanitize_account(item: dict) -> dict:
+    """Strip the raw session-token cookie from API responses but expose a hint flag."""
+    sanitized = {key: value for key, value in item.items() if key != "session_token"}
+    sanitized["has_session_token"] = bool(item.get("session_token"))
+    return sanitized
+
+
+def _sanitize_accounts(items: list[dict]) -> list[dict]:
+    return [_sanitize_account(item) for item in items if isinstance(item, dict)]
+
+
 
 class UserKeyCreateRequest(BaseModel):
     name: str = ""
@@ -34,8 +45,14 @@ class UserKeyUpdateRequest(BaseModel):
     key: str | None = None
 
 
+class AccountCreateEntry(BaseModel):
+    access_token: str = ""
+    session_token: str | None = None
+
+
 class AccountCreateRequest(BaseModel):
     tokens: list[str] = Field(default_factory=list)
+    entries: list[AccountCreateEntry] = Field(default_factory=list)
 
 
 class AccountDeleteRequest(BaseModel):
@@ -51,6 +68,7 @@ class AccountUpdateRequest(BaseModel):
     type: str | None = None
     status: str | None = None
     quota: int | None = None
+    session_token: str | None = None
 
 
 class CPAPoolCreateRequest(BaseModel):
@@ -144,21 +162,34 @@ def create_router() -> APIRouter:
     @router.get("/api/accounts")
     async def get_accounts(authorization: str | None = Header(default=None)):
         require_admin(authorization)
-        return {"items": account_service.list_accounts()}
+        return {"items": _sanitize_accounts(account_service.list_accounts())}
 
     @router.post("/api/accounts")
     async def create_accounts(body: AccountCreateRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
-        tokens = [str(token or "").strip() for token in body.tokens if str(token or "").strip()]
-        if not tokens:
+        entries: list[dict[str, str]] = []
+        for entry in body.entries:
+            access_token = str(entry.access_token or "").strip()
+            if not access_token:
+                continue
+            normalized: dict[str, str] = {"access_token": access_token}
+            if entry.session_token is not None and str(entry.session_token).strip():
+                normalized["session_token"] = str(entry.session_token).strip()
+            entries.append(normalized)
+        for token in body.tokens:
+            access_token = str(token or "").strip()
+            if access_token:
+                entries.append({"access_token": access_token})
+        if not entries:
             raise HTTPException(status_code=400, detail={"error": "tokens is required"})
-        result = account_service.add_accounts(tokens)
-        refresh_result = account_service.refresh_accounts(tokens)
+        result = account_service.add_account_entries(entries)
+        access_tokens = [entry["access_token"] for entry in entries]
+        refresh_result = account_service.refresh_accounts(access_tokens)
         return {
             **result,
             "refreshed": refresh_result.get("refreshed", 0),
             "errors": refresh_result.get("errors", []),
-            "items": refresh_result.get("items", result.get("items", [])),
+            "items": _sanitize_accounts(refresh_result.get("items", result.get("items", []))),
         }
 
     @router.delete("/api/accounts")
@@ -167,7 +198,10 @@ def create_router() -> APIRouter:
         tokens = [str(token or "").strip() for token in body.tokens if str(token or "").strip()]
         if not tokens:
             raise HTTPException(status_code=400, detail={"error": "tokens is required"})
-        return account_service.delete_accounts(tokens)
+        deleted = account_service.delete_accounts(tokens)
+        if isinstance(deleted, dict) and isinstance(deleted.get("items"), list):
+            deleted["items"] = _sanitize_accounts(deleted["items"])
+        return deleted
 
     @router.post("/api/accounts/refresh")
     async def refresh_accounts(body: AccountRefreshRequest, authorization: str | None = Header(default=None)):
@@ -177,7 +211,10 @@ def create_router() -> APIRouter:
             access_tokens = account_service.list_tokens()
         if not access_tokens:
             raise HTTPException(status_code=400, detail={"error": "access_tokens is required"})
-        return account_service.refresh_accounts(access_tokens)
+        refreshed = account_service.refresh_accounts(access_tokens)
+        if isinstance(refreshed, dict) and isinstance(refreshed.get("items"), list):
+            refreshed["items"] = _sanitize_accounts(refreshed["items"])
+        return refreshed
 
     @router.post("/api/accounts/update")
     async def update_account(body: AccountUpdateRequest, authorization: str | None = Header(default=None)):
@@ -185,13 +222,25 @@ def create_router() -> APIRouter:
         access_token = str(body.access_token or "").strip()
         if not access_token:
             raise HTTPException(status_code=400, detail={"error": "access_token is required"})
-        updates = {key: value for key, value in {"type": body.type, "status": body.status, "quota": body.quota}.items() if value is not None}
+        updates: dict[str, object] = {
+            key: value
+            for key, value in {"type": body.type, "status": body.status, "quota": body.quota}.items()
+            if value is not None
+        }
+        if isinstance(body.session_token, str):
+            normalized_session = body.session_token.strip()
+            # 想清除 session_token 的话直接传空串；想保持原值就别带这个字段。
+            updates["session_token"] = normalized_session or None
+            updates["last_renewal_error"] = None
         if not updates:
             raise HTTPException(status_code=400, detail={"error": "还没有检测到改动，请修改后再保存"})
         account = account_service.update_account(access_token, updates)
         if account is None:
             raise HTTPException(status_code=404, detail={"error": "account not found"})
-        return {"item": account, "items": account_service.list_accounts()}
+        return {
+            "item": _sanitize_account(account),
+            "items": _sanitize_accounts(account_service.list_accounts()),
+        }
 
     @router.get("/api/cpa/pools")
     async def list_cpa_pools(authorization: str | None = Header(default=None)):

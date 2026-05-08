@@ -23,6 +23,14 @@ export type Account = {
   success: number;
   fail: number;
   last_used_at?: string | null;
+  has_session_token?: boolean;
+  session_renewed_at?: string | null;
+  last_renewal_error?: string | null;
+};
+
+export type AccountImportEntry = {
+  access_token: string;
+  session_token?: string | null;
 };
 
 type AccountListResponse = {
@@ -243,6 +251,25 @@ export async function createAccounts(tokens: string[]) {
   });
 }
 
+export async function createAccountEntries(entries: AccountImportEntry[]) {
+  const normalized = entries
+    .map((entry) => {
+      const accessToken = String(entry.access_token || "").trim();
+      if (!accessToken) {
+        return null;
+      }
+      const sessionToken = entry.session_token ? String(entry.session_token).trim() : "";
+      return sessionToken
+        ? { access_token: accessToken, session_token: sessionToken }
+        : { access_token: accessToken };
+    })
+    .filter((entry): entry is { access_token: string; session_token?: string } => entry !== null);
+  return httpRequest<AccountMutationResponse>("/api/accounts", {
+    method: "POST",
+    body: { entries: normalized },
+  });
+}
+
 export async function deleteAccounts(tokens: string[]) {
   return httpRequest<AccountMutationResponse>("/api/accounts", {
     method: "DELETE",
@@ -263,6 +290,7 @@ export async function updateAccount(
     type?: AccountType;
     status?: AccountStatus;
     quota?: number;
+    session_token?: string;
   },
 ) {
   return httpRequest<AccountUpdateResponse>("/api/accounts/update", {

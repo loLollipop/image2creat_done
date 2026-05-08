@@ -9,6 +9,7 @@ import {
   Files,
   KeyRound,
   LoaderCircle,
+  RefreshCw,
   Upload,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -23,11 +24,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { createAccounts, type Account } from "@/lib/api";
+import {
+  createAccountEntries,
+  createAccounts,
+  type Account,
+  type AccountImportEntry,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-type ImportMethod = "menu" | "token" | "session" | "cpa";
+type ImportMethod = "menu" | "token" | "session" | "cpa" | "renewable";
 
 type AccountImportDialogProps = {
   disabled?: boolean;
@@ -52,6 +59,41 @@ function splitTokens(value: string) {
 function getSessionAccessToken(value: unknown) {
   const token = (value as { accessToken?: unknown })?.accessToken;
   return typeof token === "string" ? token.trim() : "";
+}
+
+function getSessionCookieToken(value: unknown): string {
+  // 兼容多种字段名：sessionToken / session_token / __Secure-next-auth.session-token
+  const candidate = value as
+    | {
+        sessionToken?: unknown;
+        session_token?: unknown;
+        ["__Secure-next-auth.session-token"]?: unknown;
+        cookie?: unknown;
+      }
+    | null
+    | undefined;
+  if (!candidate) {
+    return "";
+  }
+  const direct =
+    (typeof candidate.sessionToken === "string" && candidate.sessionToken) ||
+    (typeof candidate.session_token === "string" && candidate.session_token) ||
+    (typeof candidate["__Secure-next-auth.session-token"] === "string"
+      && candidate["__Secure-next-auth.session-token"]) ||
+    "";
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+  if (typeof candidate.cookie === "string") {
+    return extractSessionCookieFromHeader(candidate.cookie);
+  }
+  return "";
+}
+
+function extractSessionCookieFromHeader(cookieHeader: string): string {
+  // 用户也可能直接粘整个 Cookie 头，从中抽出 __Secure-next-auth.session-token
+  const match = /__Secure-next-auth\.session-token=([^;]+)/.exec(cookieHeader);
+  return match ? match[1].trim() : "";
 }
 
 function getCpaAccessToken(value: unknown) {
@@ -105,6 +147,8 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
   const [method, setMethod] = useState<ImportMethod>("menu");
   const [tokenInput, setTokenInput] = useState("");
   const [sessionInput, setSessionInput] = useState("");
+  const [renewableAt, setRenewableAt] = useState("");
+  const [renewableSession, setRenewableSession] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pendingCpaImport, setPendingCpaImport] = useState<PendingCpaImport | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -116,6 +160,8 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
     setMethod("menu");
     setTokenInput("");
     setSessionInput("");
+    setRenewableAt("");
+    setRenewableSession("");
     setPendingCpaImport(null);
     setConfirmOpen(false);
   };
@@ -127,17 +173,29 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
     }
   };
 
-  const submitTokens = async (tokens: string[], successText?: string) => {
-    const normalizedTokens = tokens.map((item) => item.trim()).filter(Boolean);
+  const submitEntries = async (entries: AccountImportEntry[], successText?: string) => {
+    const normalized: AccountImportEntry[] = [];
+    for (const entry of entries) {
+      const accessToken = String(entry.access_token || "").trim();
+      if (!accessToken) {
+        continue;
+      }
+      const sessionToken = entry.session_token ? String(entry.session_token).trim() : "";
+      normalized.push(
+        sessionToken
+          ? { access_token: accessToken, session_token: sessionToken }
+          : { access_token: accessToken },
+      );
+    }
 
-    if (normalizedTokens.length === 0) {
+    if (normalized.length === 0) {
       toast.error("请先提供至少一个可用 Token");
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const data = await createAccounts(normalizedTokens);
+      const data = await createAccountEntries(normalized);
       onImported(data.items);
       setOpen(false);
       resetState();
@@ -160,8 +218,40 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
     }
   };
 
+  const submitTokens = async (tokens: string[], successText?: string) => {
+    const entries: AccountImportEntry[] = tokens
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((access_token) => ({ access_token }));
+    await submitEntries(entries, successText);
+  };
+
   const handleImportTokenText = async () => {
     await submitTokens(splitTokens(tokenInput), "Access Token 导入完成");
+  };
+
+  const handleImportRenewable = async () => {
+    const accessToken = renewableAt.trim();
+    const sessionRaw = renewableSession.trim();
+    if (!accessToken) {
+      toast.error("请先粘贴 Access Token");
+      return;
+    }
+    if (!sessionRaw) {
+      toast.error("请先粘贴 Session Cookie，否则无法在到期时自动续期");
+      return;
+    }
+    const cookieValue = sessionRaw.includes("__Secure-next-auth.session-token=")
+      ? extractSessionCookieFromHeader(sessionRaw)
+      : sessionRaw;
+    if (!cookieValue) {
+      toast.error("未识别到 __Secure-next-auth.session-token");
+      return;
+    }
+    await submitEntries(
+      [{ access_token: accessToken, session_token: cookieValue }],
+      "Token + Session 导入完成",
+    );
   };
 
   const handleTxtSelected = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -201,13 +291,24 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
     try {
       const payload = JSON.parse(sessionInput) as unknown;
       const token = getSessionAccessToken(payload);
+      const sessionCookie = getSessionCookieToken(payload);
 
       if (!token) {
         toast.error("未从 Session JSON 中提取到 accessToken");
         return;
       }
 
-      await submitTokens([token], "Session JSON 导入完成");
+      const successText = sessionCookie
+        ? "Session JSON 导入完成（含续期 cookie）"
+        : "Session JSON 导入完成";
+      await submitEntries(
+        [
+          sessionCookie
+            ? { access_token: token, session_token: sessionCookie }
+            : { access_token: token },
+        ],
+        successText,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Session JSON 解析失败";
       toast.error(message);
@@ -354,6 +455,48 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
       );
     }
 
+    if (method === "renewable") {
+      return (
+        <div className="space-y-4">
+          <button
+            type="button"
+            onClick={() => setMethod("menu")}
+            className="inline-flex items-center gap-1 text-sm text-stone-500 transition hover:text-stone-800"
+          >
+            <ArrowLeft className="size-4" />
+            返回导入方式
+          </button>
+          <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-stone-600">
+            同时提交 Access Token 和 <code className="rounded bg-stone-200/70 px-1">__Secure-next-auth.session-token</code> cookie。Access Token 到期后，系统会自动用这个 cookie 換一个新的 token，避免号被踢出号池。
+          </div>
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
+            <div className="font-medium">安全提示</div>
+            <div>
+              session-token cookie 有较长期限（一般几个月），拿到这个 cookie 等于拿到账号的长期控制权。请只在可信服务器上使用，并只使用业务小号。
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">Access Token</label>
+            <Textarea
+              placeholder="粘贴 access token..."
+              value={renewableAt}
+              onChange={(event) => setRenewableAt(event.target.value)}
+              className="min-h-24 resize-none rounded-xl border-stone-200 font-mono text-xs"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">Session Cookie</label>
+            <Input
+              placeholder="粘贴 __Secure-next-auth.session-token 的完整值。或者整个 Cookie 头也可以，系统会自动抽取。"
+              value={renewableSession}
+              onChange={(event) => setRenewableSession(event.target.value)}
+              className="rounded-xl border-stone-200 font-mono text-xs"
+            />
+          </div>
+        </div>
+      );
+    }
+
     if (method === "cpa") {
       return (
         <div className="space-y-4">
@@ -409,8 +552,14 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
           onClick={() => setMethod("token")}
         />
         <MethodCard
+          title="导入 Token + Session Cookie · 可续期"
+          description="同时提供 access token 和 session-token cookie。Access token 到期后可自动续期，账号使用周期能从 10 天拉到几个月。"
+          icon={RefreshCw}
+          onClick={() => setMethod("renewable")}
+        />
+        <MethodCard
           title="导入 Session JSON"
-          description="从 chatgpt.com 的 session 接口复制完整 JSON，自动提取 accessToken。"
+          description="从 chatgpt.com 的 session 接口复制完整 JSON，自动提取 accessToken 与可选的 sessionToken cookie。"
           icon={FileJson}
           onClick={() => setMethod("session")}
         />
@@ -444,18 +593,22 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
                 ? "导入账户"
                 : method === "token"
                   ? "导入 Access Token"
-                  : method === "session"
-                    ? "导入 Session JSON"
-                    : "导入 CPA JSON"}
+                  : method === "renewable"
+                    ? "导入 Token + Session Cookie"
+                    : method === "session"
+                      ? "导入 Session JSON"
+                      : "导入 CPA JSON"}
             </DialogTitle>
             <DialogDescription className="text-sm leading-6">
               {method === "menu"
                 ? "选择一种导入方式。导入成功后会自动拉取邮箱、类型和额度。"
                 : method === "token"
                   ? "支持手动粘贴或从 TXT 文件导入，一行一个 Token。"
-                  : method === "session"
-                    ? "粘贴完整 Session JSON，系统会自动提取 accessToken。"
-                    : "支持一次读取多个本地 JSON 文件，并在提交前做数量确认。"}
+                  : method === "renewable"
+                    ? "同时保存 access token 和 session cookie，到期后自动续期。"
+                    : method === "session"
+                      ? "粘贴完整 Session JSON，系统会自动提取 accessToken 与可选 sessionToken cookie。"
+                      : "支持一次读取多个本地 JSON 文件，并在提交前做数量确认。"}
             </DialogDescription>
           </DialogHeader>
 
@@ -478,6 +631,16 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
               >
                 {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
                 导入 Token
+              </Button>
+            ) : null}
+            {method === "renewable" ? (
+              <Button
+                className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+                onClick={() => void handleImportRenewable()}
+                disabled={footerDisabled}
+              >
+                {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                导入可续期账号
               </Button>
             ) : null}
             {method === "session" ? (

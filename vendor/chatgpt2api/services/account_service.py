@@ -67,6 +67,10 @@ class AccountService:
         normalized["success"] = int(normalized.get("success") or 0)
         normalized["fail"] = int(normalized.get("fail") or 0)
         normalized["last_used_at"] = normalized.get("last_used_at")
+        session_token = normalized.get("session_token")
+        normalized["session_token"] = str(session_token).strip() if isinstance(session_token, str) and session_token.strip() else None
+        normalized["session_renewed_at"] = normalized.get("session_renewed_at") or None
+        normalized["last_renewal_error"] = normalized.get("last_renewal_error") or None
         return normalized
 
     def list_tokens(self) -> list[str]:
@@ -125,9 +129,14 @@ class AccountService:
             except Exception:
                 self.release_image_slot(access_token)
                 continue
+            current_token = str((account or {}).get("access_token") or access_token)
+            if current_token != access_token:
+                # 续期路径触发了 rekey：旧 token 已经从 inflight 里搬到新 token，
+                # 把新 token 也加入 attempted 防止本轮再次命中
+                attempted_tokens.add(current_token)
             if self._is_image_account_available(account or {}):
-                return access_token
-            self.release_image_slot(access_token)
+                return current_token
+            self.release_image_slot(current_token)
 
     def get_text_access_token(self, excluded_tokens: set[str] | None = None) -> str:
         excluded = set(excluded_tokens or set())
@@ -193,27 +202,47 @@ class AccountService:
             ]
 
     def add_accounts(self, tokens: list[str]) -> dict:
-        tokens = list(dict.fromkeys(token for token in tokens if token))
-        if not tokens:
+        entries = [{"access_token": token} for token in tokens if token]
+        return self.add_account_entries(entries)
+
+    def add_account_entries(self, entries: list[dict[str, Any]]) -> dict:
+        """像 add_accounts 但额外接受 session_token 等字段，按 access_token 去重。"""
+        deduped: dict[str, dict[str, Any]] = {}
+        for raw in entries:
+            if not isinstance(raw, dict):
+                continue
+            access_token = str(raw.get("access_token") or "").strip()
+            if not access_token:
+                continue
+            normalized_entry: dict[str, Any] = {"access_token": access_token}
+            session_token = raw.get("session_token")
+            if isinstance(session_token, str) and session_token.strip():
+                normalized_entry["session_token"] = session_token.strip()
+            deduped[access_token] = normalized_entry
+
+        if not deduped:
             return {"added": 0, "skipped": 0, "items": self.list_accounts()}
 
         with self._lock:
             added = 0
             skipped = 0
-            for access_token in tokens:
+            for access_token, entry in deduped.items():
                 current = self._accounts.get(access_token)
                 if current is None:
                     added += 1
                     current = {}
                 else:
                     skipped += 1
-                account = self._normalize_account(
-                    {
-                        **current,
-                        "access_token": access_token,
-                        "type": str(current.get("type") or "free"),
-                    }
-                )
+                merged: dict[str, Any] = {
+                    **current,
+                    "access_token": access_token,
+                    "type": str(current.get("type") or "free"),
+                }
+                if "session_token" in entry:
+                    # 新提供的 session_token 覆盖旧值；显式传空串可清除
+                    merged["session_token"] = entry["session_token"]
+                    merged["last_renewal_error"] = None
+                account = self._normalize_account(merged)
                 if account is not None:
                     self._accounts[access_token] = account
             self._save_accounts()
@@ -297,17 +326,129 @@ class AccountService:
             return dict(account)
         return None
 
+    def _rekey_account(self, old_token: str, new_token: str) -> bool:
+        """把账号字典从 old_token 的 key 迁到 new_token，包含 _image_inflight。
+
+        必须在已经持有 self._lock 的情况下调用，因为本类用的是非可重入 Lock。
+        """
+        if not old_token or not new_token or old_token == new_token:
+            return False
+        existing = self._accounts.pop(old_token, None)
+        if existing is None:
+            return False
+        renewed = dict(existing)
+        renewed["access_token"] = new_token
+        normalized = self._normalize_account(renewed)
+        if normalized is None:
+            self._accounts[old_token] = existing
+            return False
+        self._accounts[new_token] = normalized
+        inflight = self._image_inflight.pop(old_token, None)
+        if inflight is not None:
+            self._image_inflight[new_token] = inflight
+        return True
+
+    def _try_renew_via_session(self, access_token: str, event: str) -> str:
+        """用账号绑定的 session_token 续期一个新 access_token。
+
+        返回新的 access_token；若该账号没绑 session_token、续期失败或返回空，
+        都返回空字符串（调用方应回退到 remove_invalid_token 旧逻辑）。
+        失败原因会写到账号的 last_renewal_error 字段，方便管理员排查。
+        """
+        if not access_token:
+            return ""
+        with self._lock:
+            account = self._accounts.get(access_token)
+            session_token = str((account or {}).get("session_token") or "").strip() if account else ""
+        if not session_token:
+            return ""
+
+        new_token = ""
+        error_message = ""
+        try:
+            from services.openai_backend_api import OpenAIBackendAPI
+            new_token = OpenAIBackendAPI.fetch_session_access_token(session_token) or ""
+        except Exception as exc:
+            error_message = str(exc) or exc.__class__.__name__
+
+        if not new_token:
+            log_payload: dict[str, Any] = {
+                "source": event,
+                "token": anonymize_token(access_token),
+            }
+            if error_message:
+                log_payload["error"] = error_message
+            log_service.add(LOG_TYPE_ACCOUNT, "session 续期失败", log_payload)
+            with self._lock:
+                current = self._accounts.get(access_token)
+                if current is not None:
+                    updated = self._normalize_account({
+                        **current,
+                        "last_renewal_error": error_message or "session expired",
+                    })
+                    if updated is not None:
+                        self._accounts[access_token] = updated
+                        self._save_accounts()
+            return ""
+
+        renewed_at_iso = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            existing = self._accounts.get(access_token)
+            if existing is None:
+                return ""
+            if new_token != access_token and new_token in self._accounts:
+                # 罕见但要兜底：服务端直接给了一个池子里已有的 AT，不能 rekey 覆盖
+                log_service.add(
+                    LOG_TYPE_ACCOUNT,
+                    "session 续期返回了已存在的 token",
+                    {"source": event, "old": anonymize_token(access_token), "new": anonymize_token(new_token)},
+                )
+                return ""
+            patched = dict(existing)
+            patched["session_renewed_at"] = renewed_at_iso
+            patched["last_renewal_error"] = None
+            patched["status"] = "正常"
+            self._accounts[access_token] = patched
+            if new_token != access_token:
+                rekeyed = self._rekey_account(access_token, new_token)
+                if not rekeyed:
+                    return ""
+            self._save_accounts()
+        log_service.add(
+            LOG_TYPE_ACCOUNT,
+            "session 续期成功",
+            {
+                "source": event,
+                "old": anonymize_token(access_token),
+                "new": anonymize_token(new_token),
+            },
+        )
+        return new_token
+
     def fetch_remote_info(self, access_token: str, event: str = "fetch_remote_info") -> dict[str, Any] | None:
         if not access_token:
             raise ValueError("access_token is required")
 
+        from services.openai_backend_api import InvalidAccessTokenError, OpenAIBackendAPI
+
         try:
-            from services.openai_backend_api import InvalidAccessTokenError, OpenAIBackendAPI
             result = OpenAIBackendAPI(access_token).get_user_info()
+            return self.update_account(access_token, result)
         except InvalidAccessTokenError:
-            self.remove_invalid_token(access_token, event)
-            raise
-        return self.update_account(access_token, result)
+            new_token = self._try_renew_via_session(access_token, event)
+            if not new_token:
+                self.remove_invalid_token(access_token, event)
+                raise
+            try:
+                result = OpenAIBackendAPI(new_token).get_user_info()
+            except InvalidAccessTokenError:
+                # 续期出来的 token 立刻又被 401，直接移除新 token 对应的账号
+                self.remove_invalid_token(new_token, event)
+                raise
+            except Exception:
+                # 网络/CF 异常等：保留账号让下次再试
+                raise
+            return self.update_account(new_token, result)
 
     def refresh_accounts(self, access_tokens: list[str]) -> dict[str, Any]:
         access_tokens = list(dict.fromkeys(token for token in access_tokens if token))

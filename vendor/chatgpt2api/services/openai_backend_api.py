@@ -187,6 +187,60 @@ class OpenAIBackendAPI:
         logger.debug({"event": "backend_user_info_account_payload", "account_payload": payload})
         return ((payload.get("accounts") or {}).get("default") or {}).get("account") or {}
 
+    @staticmethod
+    def fetch_session_access_token(session_token: str) -> str:
+        """用 __Secure-next-auth.session-token cookie 拉一个新的 accessToken。
+
+        chat.openai.com / chatgpt.com 的前端在每次切换页签或定时心跳时都会
+        GET /api/auth/session，并由后端根据该 cookie 重新签发一个 ~10 天有效期
+        的 access token。这里复用同样的接口给账号续期。
+
+        参数：
+        - session_token：HttpOnly cookie 的原始值（由用户从浏览器拷贝并保存到号池）。
+
+        返回值：
+        - 成功时返回新的 accessToken 字符串
+        - cookie 已过期 / 会话被服务器作废 → 返回空字符串
+        - 传输层错误 / Cloudflare 拦截 / 解析失败 → 抛出 RuntimeError
+        """
+        normalized = str(session_token or "").strip()
+        if not normalized:
+            return ""
+        client = OpenAIBackendAPI("")
+        try:
+            client.session.cookies.set(
+                "__Secure-next-auth.session-token",
+                normalized,
+                domain=".chatgpt.com",
+                path="/",
+            )
+        except Exception:
+            try:
+                client.session.cookies.set(
+                    "__Secure-next-auth.session-token",
+                    normalized,
+                )
+            except Exception as exc:
+                raise RuntimeError(f"无法设置 session-token cookie: {exc}") from exc
+        path = "/api/auth/session"
+        response = client.session.get(
+            client.base_url + path,
+            headers=client._headers(path),
+            timeout=20,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"{path} failed: HTTP {response.status_code}")
+        try:
+            payload = response.json()
+        except Exception as exc:
+            raise RuntimeError(f"{path} returned non-JSON body") from exc
+        if not isinstance(payload, dict):
+            return ""
+        new_token = payload.get("accessToken")
+        if not isinstance(new_token, str):
+            return ""
+        return new_token.strip()
+
     def get_user_info(self) -> Dict[str, Any]:
         """获取当前 token 的账号信息。"""
         if not self.access_token:
