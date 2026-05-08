@@ -646,7 +646,28 @@ function AccountsPageContent() {
                             >
                               <Copy className="size-4" />
                             </button>
+                            {account.has_session_token ? (
+                              <Badge
+                                variant="info"
+                                className="rounded-md text-[10px] font-medium uppercase tracking-wide"
+                                title={
+                                  account.session_renewed_at
+                                    ? `上次续期：${account.session_renewed_at}`
+                                    : "已绑定 session-token，access token 到期可自动续期"
+                                }
+                              >
+                                可续期
+                              </Badge>
+                            ) : null}
                           </div>
+                          {account.last_renewal_error ? (
+                            <div
+                              className="mt-1 max-w-xs truncate text-[11px] leading-4 text-rose-500"
+                              title={account.last_renewal_error}
+                            >
+                              续期失败：{account.last_renewal_error}
+                            </div>
+                          ) : null}
                         </td>
                         <td className="px-4 py-3">
                           <Badge variant="secondary" className="rounded-md bg-stone-100 text-stone-700">
