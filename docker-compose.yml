@@ -6,10 +6,16 @@
 #   2. docker compose up -d --build
 #   3. open http://localhost:3000
 #
-# After the stack is up, sign in to chatgpt2api at http://localhost:8080/admin
-# (default auth-key: chatgpt2api) and add at least one ChatGPT account.
-# Then no further config is needed in image2creat_done — its container is
-# already pointed at http://chatgpt2api:80/v1 with auth key `chatgpt2api`.
+# Single external port: only `:3000` (the gpt-image-studio web app) is
+# exposed. The chatgpt2api admin panel is reverse-proxied at
+# http://localhost:3000/upstream/ and is gated behind admin auth there;
+# its container port is bound to 127.0.0.1:8080 only for direct local
+# debugging and is NOT reachable from the public internet.
+#
+# In the gpt-image-studio admin (login as ADMIN_EMAIL), open the
+# "上游管理" tab to manage the chatgpt2api account pool. Inside the iframe
+# you'll be asked once for CHATGPT2API_AUTH_KEY (default `chatgpt2api`),
+# then you can add at least one ChatGPT account.
 #
 # chatgpt2api is vendored under vendor/chatgpt2api/ via `git subtree`.
 # To pull the latest upstream changes:
@@ -40,14 +46,25 @@ services:
     build:
       context: ./vendor/chatgpt2api
       dockerfile: Dockerfile
+      args:
+        # Build the Next.js admin export under /upstream so it can be
+        # iframed at http://<host>/upstream/ behind the reverse proxy in
+        # the parent app.
+        NEXT_PUBLIC_BASE_PATH: /upstream
     image: gpt-image-chatgpt2api:local
     container_name: gpt-image-chatgpt2api
     restart: unless-stopped
     environment:
       STORAGE_BACKEND: json
       CHATGPT2API_AUTH_KEY: ${CHATGPT2API_AUTH_KEY:-chatgpt2api}
+      # Mirror the build-time prefix at runtime so the FastAPI side mounts
+      # admin / image / SPA routes under the same prefix.
+      BASE_PATH: /upstream
     ports:
-      - "8080:80"
+      # Bind to localhost only — the public-facing entry point is :3000
+      # which reverse-proxies /upstream/* to this container over the
+      # docker network. 127.0.0.1:8080 stays for direct local debugging.
+      - "127.0.0.1:8080:80"
     volumes:
       - chatgpt2api-data:/app/data
 
@@ -76,6 +93,9 @@ services:
       ADMIN_NAME: ${ADMIN_NAME:-Admin}
       AI_API_BASE_URL: http://chatgpt2api:80/v1
       AI_API_KEY: ${CHATGPT2API_AUTH_KEY:-chatgpt2api}
+      # Reverse proxy the chatgpt2api admin UI at /upstream/* so admins
+      # can manage the account pool from the same origin.
+      UPSTREAM_PROXY_BASE_URL: http://chatgpt2api:80
       IMAGE_MODEL: ${IMAGE_MODEL:-gpt-4o-image}
       DEFAULT_CREDITS: ${DEFAULT_CREDITS:-10}
       GENERATION_CREDIT_COST: ${GENERATION_CREDIT_COST:-1}

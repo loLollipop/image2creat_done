@@ -42,22 +42,48 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-启动后会暴露三个服务：
+**单端口部署**：对外仅暴露 `:3000`。chatgpt2api 的管理面板被反向代理在 `/upstream/*` 之下，并通过我们自己的会话 + 管理员角色控制访问；它的容器端口 `127.0.0.1:8080` 仅绑定到本机，留作直连调试用，不再向公网暴露。
 
-| 服务 | 端口 | 说明 |
+| 服务 | 暴露端口 | 说明 |
 | --- | --- | --- |
-| `app`（生图站） | http://localhost:3000 | 用户访问入口 |
-| `chatgpt2api`（上游） | http://localhost:8080 | 在 `/admin` 添加 ChatGPT 账号即可提供生图能力 |
+| `app`（生图站） | http://localhost:3000 | **唯一对外端口**；`/upstream/*` 反向代理到上游 admin |
+| `chatgpt2api`（上游） | http://127.0.0.1:8080 | 仅本机可达，用作排障；正式访问请走 `/upstream/` |
 | `mysql` | 3306 | 默认密码取自 `.env` 的 `MYSQL_PASSWORD` |
 
-`chatgpt2api` 服务的镜像由 [`vendor/chatgpt2api/`](vendor/chatgpt2api/) 中的源码本地构建，方便就地汉化、加埋点或调整逻辑（详见 [Vendored Upstream](#vendored-upstream-chatgpt2api)）。
+`chatgpt2api` 服务的镜像由 [`vendor/chatgpt2api/`](vendor/chatgpt2api/) 中的源码本地构建，方便就地汉化、加埋点或调整逻辑（详见 [Vendored Upstream](#vendored-upstream-chatgpt2api)）。它在构建时被注入 `NEXT_PUBLIC_BASE_PATH=/upstream`、运行时被注入 `BASE_PATH=/upstream`，这样它的所有路由（`/api/*` 管理接口、SPA 路由、`/images/*` 静态文件、Next.js `_next/*` 资源）都挂在 `/upstream/*` 下；只有 OpenAI 兼容的 `/v1/*` 仍然在根路径，因为生图站通过 docker 网络直接调它。
 
 首次启动后：
 
-1. 打开 http://localhost:8080/admin，输入 `.env` 里的 `CHATGPT2API_AUTH_KEY`（默认 `chatgpt2api`）登录，然后添加至少一个 ChatGPT 账号（详见 [chatgpt2api 项目说明](https://github.com/basketikun/chatgpt2api)）。
-2. 打开 http://localhost:3000，使用 `.env` 里的管理员邮箱密码登录。
-3. 在管理员后台 → 接口设置中，把 `API 地址` 改为 `http://chatgpt2api:80/v1`、`API Key` 设为 `CHATGPT2API_AUTH_KEY`、`模型` 设为 `gpt-4o-image`（或 chatgpt2api 支持的模型名）。docker-compose 已经把这些通过环境变量预填了，正常情况下不需要手工配置。
-4. 注册一个普通账号，注册即送 10 积分，可以直接生图。
+1. 打开 http://localhost:3000，使用 `.env` 里的管理员邮箱密码登录。
+2. 进入「后台管理 → 上游管理」，iframe 里第一次会要求你输入 `CHATGPT2API_AUTH_KEY`（默认 `chatgpt2api`）登录上游 admin。
+3. 在 iframe 内的上游 admin 中添加至少一个 ChatGPT 账号（详见 [chatgpt2api 项目说明](https://github.com/basketikun/chatgpt2api)）。
+4. 回到「后台管理 → 接口设置」确认 `API 地址 = http://chatgpt2api:80/v1`、`API Key = CHATGPT2API_AUTH_KEY` 已被 docker-compose 预填，无需手工修改。
+5. 注册一个普通账号，注册即送 10 积分，可以直接生图。
+
+#### nginx / Cloudflare 反向代理（线上部署示例）
+
+```nginx
+server {
+  listen 443 ssl;
+  server_name your-domain.com;
+
+  # ssl_certificate / ssl_certificate_key …
+
+  client_max_body_size 32M;
+
+  location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_read_timeout 600s;   # 给生图请求留足时间
+  }
+}
+```
+
+> 不要再在 nginx 里单独转发 `:8080` —— `:8080` 已经被绑定到 docker 主机的 `127.0.0.1`，公网无法访问；上游管理走同一域名的 `/upstream/*` 即可。
 
 > ⚠️ **chatgpt2api 仅适合免费体验档**：它是 ChatGPT 网页端逆向，作者明确禁止商业用途。一旦准备收费，请换成官方 OpenAI Images API、火山豆包、智谱 CogView 等合规上游。`payments` 表与 `provider` 字段已预留，方便后续接入。
 
@@ -224,6 +250,21 @@ set MYSQL_DATABASE=gpt_image_studio_test
 node scripts/smoke-test.js
 ```
 
+## Unified admin & upstream reverse proxy
+
+后台多了一个 **「上游管理」** Tab，里面用 `iframe` 嵌入了 `/upstream/`，也就是 chatgpt2api 自己的管理界面。访问流程：
+
+1. 浏览器请求 `https://your-domain/upstream/...`
+2. 我们的 Node 服务（`server.js`）把它 1:1 转发到 docker 网络里的 `http://chatgpt2api:80/upstream/...`
+3. 上游 FastAPI 因为运行时环境变量 `BASE_PATH=/upstream`，把所有 `/api/*`、`/images/*`、Next.js SPA 路由全部挂在 `/upstream/*` 下，所以路径不需要改写
+4. 在转发之前，Node 会检查请求者是否是登录中的本站管理员（`role=admin`、`status=active`）；非管理员一律 403
+
+技术细节：
+
+- 反向代理代码在 [`src/upstream-proxy.js`](src/upstream-proxy.js)，纯 Node.js 内置 `http`/`https`，没有引入 `http-proxy-middleware` / `node-http-proxy` 之类的额外依赖。
+- 上游地址通过环境变量 `UPSTREAM_PROXY_BASE_URL` 配置（docker-compose 已经预填为 `http://chatgpt2api:80`）。如果你不部署 chatgpt2api，把这个变量留空即可禁用 `/upstream/*` 路由。
+- `OpenAI 兼容` 的 `/v1/*` 接口**保持在根路径**，所以本站调上游生图依然走 `http://chatgpt2api:80/v1/images/generations`，没有任何路径改写。
+
 ## Security Notes
 
 - 不要把 `.env`、数据库备份、上传文件、生成图片目录提交到 GitHub。
@@ -231,6 +272,7 @@ node scripts/smoke-test.js
 - 建议生产环境开启 HTTPS，并把生成图片迁移到对象存储或 CDN。
 - 管理员后台应使用强密码，必要时放在反向代理鉴权或内网访问后面。
 - API Key 支持在后台配置，但仍建议只给可信管理员开放后台。
+- chatgpt2api 容器端口默认绑定到 `127.0.0.1:8080`（不是 `0.0.0.0:8080`），公网扫不到；正式访问统一通过 `:3000/upstream/*`。
 
 ## Project Structure
 

@@ -9,9 +9,16 @@ WORKDIR /app/web
 COPY web/package.json web/bun.lock ./
 RUN npm install
 
+# Optional: when this image is mounted under a parent reverse proxy, set
+# NEXT_PUBLIC_BASE_PATH to the same prefix (e.g. /upstream) so the static
+# export uses that path for routes and assets.
+ARG NEXT_PUBLIC_BASE_PATH=""
+
 COPY VERSION /app/VERSION
 COPY web ./
-RUN NEXT_PUBLIC_APP_VERSION="$(cat /app/VERSION)" npm run build
+RUN NEXT_PUBLIC_APP_VERSION="$(cat /app/VERSION)" \
+    NEXT_PUBLIC_BASE_PATH="$NEXT_PUBLIC_BASE_PATH" \
+    npm run build
 
 
 FROM --platform=$TARGETPLATFORM python:3.13-slim AS app

@@ -106,6 +106,7 @@ function renderAdmin() {
       <button class="secondary ${state.view === "redeem" ? "active" : ""}" data-view="redeem">卡密管理</button>
       <button class="secondary ${state.view === "transactions" ? "active" : ""}" data-view="transactions">积分流水</button>
       <button class="secondary ${state.view === "payments" ? "active" : ""}" data-view="payments">支付订单</button>
+      <button class="secondary ${state.view === "upstream" ? "active" : ""}" data-view="upstream">上游管理</button>
       <button class="secondary ${state.view === "settings" ? "active" : ""}" data-view="settings">接口设置</button>
     </div>
     <section id="panel"></section>
@@ -127,7 +128,36 @@ function renderPanel() {
   if (state.view === "redeem") return renderRedeem();
   if (state.view === "transactions") return renderTransactions();
   if (state.view === "payments") return renderPayments();
+  if (state.view === "upstream") return renderUpstream();
   renderSettings();
+}
+
+function renderUpstream() {
+  $("#panel").innerHTML = `
+    <div class="card upstream-card">
+      <div class="upstream-header">
+        <div>
+          <h2>上游管理（chatgpt2api）</h2>
+          <p class="muted">
+            管理上游账号池、查看上游存储和系统状态。
+            首次进入需要使用 <code>CHATGPT2API_AUTH_KEY</code>（默认 <code>chatgpt2api</code>）登录。
+            该面板已通过反向代理收口在本站，外部不再暴露 8080 端口。
+          </p>
+        </div>
+        <div class="upstream-header-actions">
+          <a class="secondary" href="/upstream/" target="_blank" rel="noopener">在新标签页打开</a>
+        </div>
+      </div>
+      <div class="upstream-frame-wrap">
+        <iframe
+          class="upstream-frame"
+          src="/upstream/"
+          title="chatgpt2api admin"
+          referrerpolicy="same-origin"
+        ></iframe>
+      </div>
+    </div>
+  `;
 }
 
 const TX_TYPE_LABELS = {
@@ -504,6 +534,8 @@ async function loadPanel() {
   } else if (state.view === "payments") {
     const data = await api("/api/admin/payments");
     state.payments = data.payments || [];
+  } else if (state.view === "upstream") {
+    // No backend prefetch needed — the iframe renders chatgpt2api directly.
   } else {
     state.settings = await api("/api/admin/settings");
   }

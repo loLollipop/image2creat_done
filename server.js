@@ -30,6 +30,7 @@ function loadEnvFile(filePath) {
 loadEnvFile(path.join(ROOT_DIR, ".env"));
 
 const store = require("./src/mysql-store");
+const { createUpstreamProxy } = require("./src/upstream-proxy");
 
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(ROOT_DIR, "data"));
@@ -39,6 +40,15 @@ const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MODEL = "GPT-IMAGE-2";
 const CHECKIN_CREDIT = Number.parseInt(process.env.CHECKIN_CREDIT || "1", 10) || 1;
+
+const UPSTREAM_MOUNT_PATH = "/upstream";
+const UPSTREAM_BASE_URL = (process.env.UPSTREAM_PROXY_BASE_URL || "").trim();
+const upstreamProxy = UPSTREAM_BASE_URL
+  ? createUpstreamProxy({
+      upstreamBase: UPSTREAM_BASE_URL,
+      mountPath: UPSTREAM_MOUNT_PATH
+    })
+  : null;
 
 const generationWindows = new Map();
 
@@ -1190,9 +1200,49 @@ async function serveStatic(req, res, url) {
   }
 }
 
+async function handleUpstream(req, res, url) {
+  if (!upstreamProxy) {
+    sendError(res, 503, "Upstream proxy is not configured");
+    return;
+  }
+  let current;
+  try {
+    current = await getCurrentUser(req);
+  } catch (error) {
+    sendError(res, 500, "Authentication check failed");
+    console.error(error);
+    return;
+  }
+  if (!current?.user || current.user.role !== "admin" || current.user.status !== "active") {
+    if (req.method === "GET" && req.headers.accept && req.headers.accept.includes("text/html")) {
+      res.writeHead(302, { Location: "/admin?upstreamAuth=required" });
+      res.end();
+      return;
+    }
+    sendError(res, 403, "Admin access required");
+    return;
+  }
+  // Normalize bare /upstream → /upstream/ so the upstream catch-all can serve
+  // its SPA index. Without the trailing slash FastAPI's basePath route would
+  // 404 because it expects /upstream/{full_path:path}.
+  if (url.pathname === UPSTREAM_MOUNT_PATH) {
+    res.writeHead(308, { Location: `${UPSTREAM_MOUNT_PATH}/${url.search || ""}` });
+    res.end();
+    return;
+  }
+  upstreamProxy(req, res, url);
+}
+
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   try {
+    if (
+      url.pathname === UPSTREAM_MOUNT_PATH ||
+      url.pathname.startsWith(`${UPSTREAM_MOUNT_PATH}/`)
+    ) {
+      await handleUpstream(req, res, url);
+      return;
+    }
     if (url.pathname.startsWith("/api/")) {
       await routeApi(req, res, url);
       return;
