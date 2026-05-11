@@ -12,6 +12,7 @@ const state = {
   redeemFilter: "",
   transactions: [],
   payments: [],
+  accounts: [],
   lastBatch: null
 };
 
@@ -106,7 +107,8 @@ function renderAdmin() {
       <button class="secondary ${state.view === "redeem" ? "active" : ""}" data-view="redeem">卡密管理</button>
       <button class="secondary ${state.view === "transactions" ? "active" : ""}" data-view="transactions">积分流水</button>
       <button class="secondary ${state.view === "payments" ? "active" : ""}" data-view="payments">支付订单</button>
-      <button class="secondary ${state.view === "upstream" ? "active" : ""}" data-view="upstream">上游管理</button>
+      <button class="secondary ${state.view === "accounts" ? "active" : ""}" data-view="accounts">号池</button>
+      <button class="secondary ${state.view === "upstream" ? "active" : ""}" data-view="upstream">上游管理（旧）</button>
       <button class="secondary ${state.view === "settings" ? "active" : ""}" data-view="settings">接口设置</button>
     </div>
     <section id="panel"></section>
@@ -128,6 +130,7 @@ function renderPanel() {
   if (state.view === "redeem") return renderRedeem();
   if (state.view === "transactions") return renderTransactions();
   if (state.view === "payments") return renderPayments();
+  if (state.view === "accounts") return renderAccounts();
   if (state.view === "upstream") return renderUpstream();
   renderSettings();
 }
@@ -137,11 +140,11 @@ function renderUpstream() {
     <div class="card upstream-card">
       <div class="upstream-header">
         <div>
-          <h2>上游管理（chatgpt2api）</h2>
+          <h2>上游管理（旧 iframe）</h2>
           <p class="muted">
-            管理上游账号池、查看上游存储和系统状态。
-            首次进入需要使用 <code>CHATGPT2API_AUTH_KEY</code>（默认 <code>chatgpt2api</code>）登录。
-            该面板已通过反向代理收口在本站，外部不再暴露 8080 端口。
+            注意：号池现在已经原生集成到本站「号池」标签页，无需再进 iframe。
+            这里保留是为了访问 chatgpt2api 还没原生化的功能（注册机 / 日志 / 系统设置 / 备份）。
+            后续 PR 会逐个把这些功能也搬过来，最后会移除本页。
           </p>
         </div>
         <div class="upstream-header-actions">
@@ -158,6 +161,238 @@ function renderUpstream() {
       </div>
     </div>
   `;
+}
+
+const ACCOUNT_STATUS_LABEL = {
+  normal: "正常",
+  limited: "限流",
+  abnormal: "异常",
+  disabled: "已禁用"
+};
+
+function accountStatusClass(status) {
+  if (status === "normal") return "";
+  if (status === "limited") return "warn";
+  return "failed";
+}
+
+function tokenPreview(token) {
+  const value = String(token || "");
+  if (value.length <= 14) return value;
+  return `${value.slice(0, 6)}…${value.slice(-6)}`;
+}
+
+function renderAccounts() {
+  const items = state.accounts || [];
+  $("#panel").innerHTML = `
+    <div class="card">
+      <div class="upstream-header">
+        <div>
+          <h2>号池（chatgpt2api 账号）</h2>
+          <p class="muted">原生管理 chatgpt2api 的 ChatGPT 账号池：增加 / 删除 access_token、刷新状态、编辑配额。</p>
+        </div>
+        <div class="upstream-header-actions">
+          <button class="secondary" type="button" id="accountsRefreshBtn">全部刷新状态</button>
+          <button class="primary" type="button" id="accountsAddBtn">添加账号</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        ${items.length ? `
+          <table>
+            <thead>
+              <tr>
+                <th>账号</th>
+                <th>类型</th>
+                <th>状态</th>
+                <th>access_token</th>
+                <th>session_token</th>
+                <th>配额</th>
+                <th>已用</th>
+                <th>上次刷新</th>
+                <th>错误</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${items.map((account) => {
+                const statusKey = String(account.status || "").toLowerCase();
+                const statusLabel = ACCOUNT_STATUS_LABEL[statusKey] || account.status || "-";
+                const statusClass = accountStatusClass(statusKey);
+                return `
+                  <tr data-token="${escapeHtml(account.access_token || "")}">
+                    <td><strong>${escapeHtml(account.email || account.name || "-")}</strong></td>
+                    <td>${escapeHtml(account.type || "-")}</td>
+                    <td><span class="status ${statusClass}">${escapeHtml(statusLabel)}</span></td>
+                    <td><code>${escapeHtml(tokenPreview(account.access_token))}</code></td>
+                    <td>${account.has_session_token ? `<code>${escapeHtml(tokenPreview(account.session_token || "")) || "已设置"}</code>` : `<span class="muted">未设置</span>`}</td>
+                    <td>${account.quota ?? "-"}</td>
+                    <td>${account.used ?? "-"}</td>
+                    <td>${fmt(account.last_renewal_at || account.updated_at || account.created_at)}</td>
+                    <td class="prompt-cell">${account.last_renewal_error ? `<span class="muted">${escapeHtml(String(account.last_renewal_error).slice(0, 120))}</span>` : ""}</td>
+                    <td>
+                      <button class="secondary" data-action="refresh" type="button">刷新</button>
+                      <button class="secondary" data-action="edit" type="button">编辑</button>
+                      <button class="secondary" data-action="delete" type="button">删除</button>
+                    </td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        ` : `<div class="empty">号池暂无账号。点击右上角「添加账号」开始。</div>`}
+      </div>
+    </div>
+  `;
+
+  $("#accountsRefreshBtn").addEventListener("click", () => refreshAccounts());
+  $("#accountsAddBtn").addEventListener("click", () => openAddAccountDialog());
+  $$("tr[data-token]").forEach((row) => {
+    const token = row.dataset.token;
+    $("[data-action='refresh']", row)?.addEventListener("click", () => refreshAccounts([token]));
+    $("[data-action='edit']", row)?.addEventListener("click", () => openEditAccountDialog(token));
+    $("[data-action='delete']", row)?.addEventListener("click", () => deleteAccounts([token]));
+  });
+}
+
+async function refreshAccounts(accessTokens = []) {
+  try {
+    const data = await api("/api/admin/upstream/accounts/refresh", {
+      method: "POST",
+      body: JSON.stringify({ access_tokens: accessTokens })
+    });
+    if (Array.isArray(data.items)) {
+      state.accounts = data.items;
+      renderAccounts();
+    } else {
+      await loadPanel();
+      renderAccounts();
+    }
+    toast(accessTokens.length ? "账号已刷新" : "已刷新全部账号");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function deleteAccounts(tokens) {
+  if (!Array.isArray(tokens) || tokens.length === 0) return;
+  if (!window.confirm(`确认删除 ${tokens.length} 个账号？此操作不可撤销。`)) return;
+  try {
+    await api("/api/admin/upstream/accounts", {
+      method: "DELETE",
+      body: JSON.stringify({ tokens })
+    });
+    toast("已删除");
+    await loadPanel();
+    renderAccounts();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function openAddAccountDialog() {
+  const wrap = document.createElement("div");
+  wrap.className = "toast-layer";
+  wrap.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,0.42);display:grid;place-items:center;z-index:60";
+  wrap.innerHTML = `
+    <div class="card" style="max-width:560px;width:90%">
+      <h2 style="margin-top:0">添加账号</h2>
+      <p class="muted">把 ChatGPT 网页登录后拿到的 <code>access_token</code> 粘贴进来，一行一个。也可以填 JSON（含 access_token + session_token），一行一个 JSON 对象。</p>
+      <label>access_token / JSON（每行一条）<textarea id="addAccountText" rows="10" style="font-family:monospace;font-size:12px"></textarea></label>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+        <button class="secondary" type="button" id="addAccountCancel">取消</button>
+        <button class="primary" type="button" id="addAccountSubmit">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+  $("#addAccountCancel", wrap).addEventListener("click", () => wrap.remove());
+  $("#addAccountSubmit", wrap).addEventListener("click", async () => {
+    const raw = $("#addAccountText", wrap).value.trim();
+    if (!raw) { toast("请粘贴至少一条 access_token"); return; }
+    const tokens = [];
+    const entries = [];
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (trimmed.startsWith("{")) {
+        try {
+          const obj = JSON.parse(trimmed);
+          if (obj && typeof obj.access_token === "string") {
+            entries.push({ access_token: obj.access_token, session_token: obj.session_token });
+            continue;
+          }
+        } catch { /* fall through */ }
+      }
+      tokens.push(trimmed);
+    }
+    if (tokens.length === 0 && entries.length === 0) { toast("没有可用的 access_token"); return; }
+    try {
+      const result = await api("/api/admin/upstream/accounts", {
+        method: "POST",
+        body: JSON.stringify({ tokens, entries })
+      });
+      toast(`成功导入 ${result.added ?? result.refreshed ?? (tokens.length + entries.length)} 条`);
+      wrap.remove();
+      await loadPanel();
+      renderAccounts();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+}
+
+function openEditAccountDialog(token) {
+  const account = (state.accounts || []).find((a) => a.access_token === token);
+  if (!account) return;
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,0.42);display:grid;place-items:center;z-index:60";
+  wrap.innerHTML = `
+    <div class="card" style="max-width:520px;width:90%">
+      <h2 style="margin-top:0">编辑账号</h2>
+      <p class="muted">${escapeHtml(account.email || account.name || "")} <code>${escapeHtml(tokenPreview(account.access_token))}</code></p>
+      <label>状态
+        <select id="editAccountStatus">
+          <option value="normal" ${account.status === "normal" ? "selected" : ""}>正常</option>
+          <option value="limited" ${account.status === "limited" ? "selected" : ""}>限流</option>
+          <option value="abnormal" ${account.status === "abnormal" ? "selected" : ""}>异常</option>
+          <option value="disabled" ${account.status === "disabled" ? "selected" : ""}>禁用</option>
+        </select>
+      </label>
+      <label>类型 <input id="editAccountType" value="${escapeHtml(account.type || "")}"></label>
+      <label>配额 <input id="editAccountQuota" type="number" min="0" value="${Number(account.quota || 0)}"></label>
+      <label>session_token（留空保持原值；想清除就直接清空再勾选下面）<textarea id="editAccountSession" rows="3" style="font-family:monospace;font-size:12px"></textarea></label>
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="editAccountSessionClear"> 清除 session_token</label>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+        <button class="secondary" type="button" id="editAccountCancel">取消</button>
+        <button class="primary" type="button" id="editAccountSubmit">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+  $("#editAccountCancel", wrap).addEventListener("click", () => wrap.remove());
+  $("#editAccountSubmit", wrap).addEventListener("click", async () => {
+    const payload = { access_token: token };
+    payload.status = $("#editAccountStatus", wrap).value;
+    const typeValue = $("#editAccountType", wrap).value.trim();
+    if (typeValue) payload.type = typeValue;
+    payload.quota = Number($("#editAccountQuota", wrap).value || 0);
+    const sessionValue = $("#editAccountSession", wrap).value.trim();
+    const clearSession = $("#editAccountSessionClear", wrap).checked;
+    if (clearSession) payload.session_token = "";
+    else if (sessionValue) payload.session_token = sessionValue;
+    try {
+      await api("/api/admin/upstream/accounts/update", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      toast("账号已更新");
+      wrap.remove();
+      await loadPanel();
+      renderAccounts();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
 }
 
 const TX_TYPE_LABELS = {
@@ -574,6 +809,14 @@ async function loadPanel() {
   } else if (state.view === "payments") {
     const data = await api("/api/admin/payments");
     state.payments = data.payments || [];
+  } else if (state.view === "accounts") {
+    try {
+      const data = await api("/api/admin/upstream/accounts");
+      state.accounts = data.items || [];
+    } catch (error) {
+      state.accounts = [];
+      toast(error.message);
+    }
   } else if (state.view === "upstream") {
     // No backend prefetch needed — the iframe renders chatgpt2api directly.
   } else {
