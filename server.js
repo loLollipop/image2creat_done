@@ -159,44 +159,80 @@ function serializeUser(user) {
   };
 }
 
+const UPSTREAM_IDS = ["chatgpt2api", "cpa"];
+
+function normalizeUpstreamId(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return UPSTREAM_IDS.includes(raw) ? raw : "chatgpt2api";
+}
+
+function getActiveUpstreamId(settings = {}) {
+  return normalizeUpstreamId(settings.activeUpstream);
+}
+
+// Resolve the upstream-specific apiKey / baseUrl / model. The chatgpt2api preset
+// also falls back to env vars so the old single-upstream deployments keep
+// working when active_upstream defaults to chatgpt2api.
+function getUpstreamConfig(settings = {}, upstreamId = getActiveUpstreamId(settings)) {
+  if (upstreamId === "cpa") {
+    return {
+      id: "cpa",
+      apiKey: settings.cpaApiKey || process.env.CPA_API_KEY || "",
+      baseUrl: String(settings.cpaApiBaseUrl || process.env.CPA_API_BASE_URL || "").trim().replace(/\/+$/, ""),
+      model: (settings.cpaModel || process.env.CPA_IMAGE_MODEL || "").trim()
+    };
+  }
+  return {
+    id: "chatgpt2api",
+    apiKey: settings.openaiApiKey || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "",
+    baseUrl: String(settings.apiBaseUrl || process.env.AI_API_BASE_URL || process.env.OPENAI_BASE_URL || "").trim().replace(/\/+$/, ""),
+    model: (settings.model || "").trim()
+  };
+}
+
 function getOpenAIApiKey(settings) {
-  return settings.openaiApiKey || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "";
+  return getUpstreamConfig(settings).apiKey;
 }
 
 function getOpenAIBaseUrl(settings = {}) {
-  return String(settings.apiBaseUrl || process.env.AI_API_BASE_URL || process.env.OPENAI_BASE_URL || "").trim().replace(/\/+$/, "");
+  return getUpstreamConfig(settings).baseUrl;
+}
+
+function joinUpstreamPath(cleanBase, suffix) {
+  // suffix is one of "images/generations", "images/edits", "responses".
+  if (!cleanBase) throw httpError("AI API base URL is not configured", 400);
+  if (cleanBase.endsWith(`/${suffix}`)) return cleanBase;
+  if (suffix !== "images/generations" && cleanBase.endsWith("/images/generations")) {
+    return cleanBase.replace(/\/images\/generations$/, `/${suffix}`);
+  }
+  if (cleanBase.endsWith("/v1")) return `${cleanBase}/${suffix}`;
+  return `${cleanBase}/v1/${suffix}`;
 }
 
 function getOpenAIImageEndpoint(settings = {}) {
-  const cleanBase = getOpenAIBaseUrl(settings);
-  if (!cleanBase) throw httpError("AI API base URL is not configured", 400);
-  if (cleanBase.endsWith("/images/generations")) return cleanBase;
-  if (cleanBase.endsWith("/v1")) return `${cleanBase}/images/generations`;
-  return `${cleanBase}/v1/images/generations`;
+  return joinUpstreamPath(getOpenAIBaseUrl(settings), "images/generations");
 }
 
 function getOpenAIResponsesEndpoint(settings = {}) {
-  const cleanBase = getOpenAIBaseUrl(settings);
-  if (!cleanBase) throw httpError("AI API base URL is not configured", 400);
-  if (cleanBase.endsWith("/responses")) return cleanBase;
-  if (cleanBase.endsWith("/images/generations")) return cleanBase.replace(/\/images\/generations$/, "/responses");
-  if (cleanBase.endsWith("/v1")) return `${cleanBase}/responses`;
-  return `${cleanBase}/v1/responses`;
+  return joinUpstreamPath(getOpenAIBaseUrl(settings), "responses");
 }
 
 function getOpenAIEditEndpoint(settings = {}) {
-  const cleanBase = getOpenAIBaseUrl(settings);
-  if (!cleanBase) throw httpError("AI API base URL is not configured", 400);
-  if (cleanBase.endsWith("/images/edits")) return cleanBase;
-  if (cleanBase.endsWith("/images/generations")) return cleanBase.replace(/\/images\/generations$/, "/images/edits");
-  if (cleanBase.endsWith("/v1")) return `${cleanBase}/images/edits`;
-  return `${cleanBase}/v1/images/edits`;
+  return joinUpstreamPath(getOpenAIBaseUrl(settings), "images/edits");
+}
+
+function maskApiKey(key) {
+  if (!key) return "";
+  if (key.length <= 11) return `${key.slice(0, 3)}...`;
+  return `${key.slice(0, 7)}...${key.slice(-4)}`;
 }
 
 function publicSettings(settings) {
+  const active = getUpstreamConfig(settings);
   return {
-    hasApiKey: Boolean(getOpenAIApiKey(settings) && getOpenAIBaseUrl(settings)),
-    model: settings.model || DEFAULT_MODEL,
+    hasApiKey: Boolean(active.apiKey && active.baseUrl),
+    model: active.model || settings.model || DEFAULT_MODEL,
+    activeUpstream: active.id,
     allowRegistration: Boolean(settings.allowRegistration),
     requireApproval: Boolean(settings.requireApproval),
     defaultCredits: Number(settings.defaultCredits || 0),
@@ -207,11 +243,30 @@ function publicSettings(settings) {
 }
 
 function adminSettings(settings) {
-  const key = getOpenAIApiKey(settings);
+  const chatgpt2api = getUpstreamConfig(settings, "chatgpt2api");
+  const cpa = getUpstreamConfig(settings, "cpa");
+  const active = getUpstreamConfig(settings);
   return {
     ...publicSettings(settings),
-    apiBaseUrl: getOpenAIBaseUrl(settings),
-    apiKeyMask: key ? `${key.slice(0, 7)}...${key.slice(-4)}` : ""
+    // Legacy fields, kept for backwards-compatibility with any consumer of
+    // /api/admin/settings that still reads them. They reflect the active
+    // upstream when no explicit override is supplied.
+    apiBaseUrl: active.baseUrl,
+    apiKeyMask: maskApiKey(active.apiKey),
+    upstreams: {
+      chatgpt2api: {
+        apiBaseUrl: chatgpt2api.baseUrl,
+        apiKeyMask: maskApiKey(chatgpt2api.apiKey),
+        hasApiKey: Boolean(chatgpt2api.apiKey),
+        model: chatgpt2api.model || ""
+      },
+      cpa: {
+        apiBaseUrl: cpa.baseUrl,
+        apiKeyMask: maskApiKey(cpa.apiKey),
+        hasApiKey: Boolean(cpa.apiKey),
+        model: cpa.model || ""
+      }
+    }
   };
 }
 
@@ -547,7 +602,7 @@ async function imageItemToBuffer(item, request) {
   return null;
 }
 
-async function saveGeneratedImages(user, request, openaiResult) {
+async function saveGeneratedImages(user, request, openaiResult, upstreamUsed = "") {
   await fs.mkdir(GENERATED_DIR, { recursive: true });
   const items = extractImageItems(openaiResult);
   const saved = [];
@@ -574,6 +629,7 @@ async function saveGeneratedImages(user, request, openaiResult) {
       isPublic: Boolean(request.isPublic),
       revisedPrompt: item.revised_prompt || "",
       usage: openaiResult.usage || item.usage || null,
+      upstreamUsed,
       createdAt: nowIso()
     };
     saved.push({
@@ -716,6 +772,7 @@ async function routeApi(req, res, url) {
     const body = await readJsonBody(req);
     const patch = {};
 
+    // chatgpt2api preset (legacy field names)
     if (typeof body.openaiApiKey === "string") {
       const key = body.openaiApiKey.trim();
       if (key) patch.openaiApiKey = key;
@@ -727,6 +784,23 @@ async function routeApi(req, res, url) {
     if (typeof body.model === "string" && body.model.trim()) {
       patch.model = body.model.trim().slice(0, 80);
     }
+
+    // CPA preset
+    if (typeof body.cpaApiKey === "string") {
+      const key = body.cpaApiKey.trim();
+      if (key) patch.cpaApiKey = key;
+    }
+    if (body.clearCpaApiKey === true) patch.cpaApiKey = "";
+    if (typeof body.cpaApiBaseUrl === "string") {
+      patch.cpaApiBaseUrl = body.cpaApiBaseUrl.trim().replace(/\/+$/, "").slice(0, 255);
+    }
+    if (typeof body.cpaModel === "string") {
+      patch.cpaModel = body.cpaModel.trim().slice(0, 80);
+    }
+    if (typeof body.activeUpstream === "string") {
+      patch.activeUpstream = normalizeUpstreamId(body.activeUpstream);
+    }
+
     if (body.defaultCredits !== undefined) {
       patch.defaultCredits = Math.max(0, Math.min(10000, Number.parseInt(body.defaultCredits, 10) || 0));
     }
@@ -741,6 +815,61 @@ async function routeApi(req, res, url) {
 
     const settings = await store.updateSettings(patch);
     return sendJson(res, 200, adminSettings(settings));
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/admin/settings/test") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    const body = await readJsonBody(req);
+    const targetId = normalizeUpstreamId(body.upstream);
+    const settings = await store.getSettings();
+    const cfg = getUpstreamConfig(settings, targetId);
+    if (!cfg.baseUrl || !cfg.apiKey) {
+      return sendJson(res, 200, {
+        upstream: targetId,
+        ok: false,
+        status: 0,
+        message: "API base URL or API key is not configured for this upstream."
+      });
+    }
+    const modelsUrl = cfg.baseUrl.endsWith("/v1")
+      ? `${cfg.baseUrl}/models`
+      : `${cfg.baseUrl}/v1/models`;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      let response;
+      try {
+        response = await fetch(modelsUrl, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${cfg.apiKey}` },
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      const text = await response.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+      const modelCount = Array.isArray(data?.data) ? data.data.length : null;
+      return sendJson(res, 200, {
+        upstream: targetId,
+        ok: response.ok,
+        status: response.status,
+        modelCount,
+        message: response.ok
+          ? `OK (${modelCount ?? "?"} models)`
+          : data?.error?.message || text.slice(0, 200) || `HTTP ${response.status}`
+      });
+    } catch (error) {
+      return sendJson(res, 200, {
+        upstream: targetId,
+        ok: false,
+        status: 0,
+        message: String(error?.message || error).slice(0, 200)
+      });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/admin/users") {
@@ -945,8 +1074,10 @@ async function routeApi(req, res, url) {
     const n = sanitizePositiveInt(body.n, 1, maxImages);
     const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
     const totalCost = costPerImage * n;
+    const activeUpstream = getActiveUpstreamId(settings);
+    const activeModel = getUpstreamConfig(settings, activeUpstream).model;
     const request = {
-      model: String(settings.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
+      model: String(activeModel || settings.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
       prompt,
       n,
       size: normalizeImageSize(body.size),
@@ -994,7 +1125,7 @@ async function routeApi(req, res, url) {
 
     try {
       const openaiResult = await callOpenAIImages(settings, openaiRequest);
-      const saved = await saveGeneratedImages(user, request, openaiResult);
+      const saved = await saveGeneratedImages(user, request, openaiResult, activeUpstream);
       if (!saved.length) {
         throw httpError("OpenAI did not return a savable image", 502);
       }
@@ -1060,8 +1191,10 @@ async function routeApi(req, res, url) {
     }
 
     const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
+    const activeUpstream = getActiveUpstreamId(settings);
+    const activeModel = getUpstreamConfig(settings, activeUpstream).model;
     const request = {
-      model: String(settings.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
+      model: String(activeModel || settings.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
       prompt,
       n: 1,
       size: normalizeImageSize(body.size),
@@ -1111,7 +1244,7 @@ async function routeApi(req, res, url) {
 
     try {
       const openaiResult = await callOpenAIImageEdits(settings, payload);
-      const saved = await saveGeneratedImages(user, request, openaiResult);
+      const saved = await saveGeneratedImages(user, request, openaiResult, activeUpstream);
       if (!saved.length) {
         throw httpError("OpenAI did not return a savable edited image", 502);
       }

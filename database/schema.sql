@@ -4,11 +4,19 @@ CREATE DATABASE IF NOT EXISTS `gpt_image_studio`
 
 USE `gpt_image_studio`;
 
+-- The legacy `openai_api_key` / `api_base_url` / `model` columns hold the
+-- chatgpt2api preset (the original / default upstream). The `cpa_*` columns
+-- hold a second, CLIProxyAPI-compatible upstream. `active_upstream` selects
+-- which preset image requests use at runtime.
 CREATE TABLE IF NOT EXISTS app_settings (
   id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
   openai_api_key TEXT NULL,
   api_base_url VARCHAR(255) NOT NULL DEFAULT '',
   model VARCHAR(80) NOT NULL,
+  cpa_api_key TEXT NULL,
+  cpa_api_base_url VARCHAR(255) NOT NULL DEFAULT '',
+  cpa_model VARCHAR(80) NOT NULL DEFAULT '',
+  active_upstream VARCHAR(16) NOT NULL DEFAULT 'chatgpt2api',
   default_credits INT UNSIGNED NOT NULL DEFAULT 10,
   generation_credit_cost INT UNSIGNED NOT NULL DEFAULT 1,
   allow_registration TINYINT(1) NOT NULL DEFAULT 1,
@@ -57,6 +65,7 @@ CREATE TABLE IF NOT EXISTS generations (
   is_public TINYINT(1) NOT NULL DEFAULT 0,
   revised_prompt TEXT NULL,
   usage_json LONGTEXT NULL,
+  upstream_used VARCHAR(16) NOT NULL DEFAULT '',
   created_at DATETIME(3) NOT NULL,
   INDEX idx_generations_user_created (user_id, created_at),
   INDEX idx_generations_created_at (created_at),
@@ -169,6 +178,10 @@ CREATE TABLE IF NOT EXISTS payments (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT IGNORE INTO app_settings
-  (id, openai_api_key, api_base_url, model, default_credits, generation_credit_cost, allow_registration, require_approval, max_images_per_request)
+  (id, openai_api_key, api_base_url, model,
+   cpa_api_key, cpa_api_base_url, cpa_model, active_upstream,
+   default_credits, generation_credit_cost, allow_registration, require_approval, max_images_per_request)
 VALUES
-  (1, '', '', 'GPT-IMAGE-2', 10, 1, 1, 0, 1);
+  (1, '', '', 'GPT-IMAGE-2',
+   '', '', '', 'chatgpt2api',
+   10, 1, 1, 0, 1);

@@ -166,6 +166,44 @@ a {
   font-weight: 700;
 }
 
+.upstream-group {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin: 0;
+}
+
+.upstream-group legend {
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #667085;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.upstream-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.upstream-test-result {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.upstream-test-result.ok {
+  color: #027a48;
+}
+
+.upstream-test-result.failed {
+  color: #b42318;
+}
+
 input,
 select,
 textarea {

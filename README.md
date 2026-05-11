@@ -130,6 +130,11 @@ AI_API_BASE_URL=
 AI_API_KEY=
 IMAGE_MODEL=GPT-IMAGE-2
 
+CPA_API_BASE_URL=
+CPA_API_KEY=
+CPA_IMAGE_MODEL=
+ACTIVE_UPSTREAM=chatgpt2api
+
 DEFAULT_CREDITS=10
 GENERATION_CREDIT_COST=1
 CHECKIN_CREDIT=1
@@ -140,11 +145,14 @@ MAX_IMAGES_PER_REQUEST=1
 
 说明：
 
-- `AI_API_BASE_URL`：你的 AI API 服务地址，例如兼容 OpenAI Images API 的网关地址。
-- `AI_API_KEY`：你的 API 密钥。密钥只保存在服务端环境变量或数据库设置里，不会下发到浏览器。
+- `AI_API_BASE_URL` / `AI_API_KEY` / `IMAGE_MODEL`：**chatgpt2api 预设**（默认上游，docker-compose 内置）。
+- `CPA_API_BASE_URL` / `CPA_API_KEY` / `CPA_IMAGE_MODEL`：**CPA 预设**（任意 OpenAI 兼容 Bearer 上游，例如 CLIProxyAPI 给 Codex / Cherry Studio 用的那把 key）。留空即关闭这条路径。
+- `ACTIVE_UPSTREAM`：首次启动时启用的上游，`chatgpt2api` 或 `cpa`。启动后保存在数据库里，由「后台 → 接口设置」切换，不需要重启。
 - `ADMIN_EMAIL` / `ADMIN_PASSWORD`：首次启动时用于自动创建或激活管理员账号。
 - `GENERATION_CREDIT_COST`：每次生成消耗的积分。
 - `CHECKIN_CREDIT`：用户每日签到获得的积分。
+
+两组预设可以同时填，每次生图只会用「当前启用」的那一组。后台「接口设置」里有「测试」按钮，点击会用对应 key 调一次该上游的 `/v1/models`，方便排查连通性。「生图记录」每条会标注当时走的哪条上游。
 
 ## Database
 
