@@ -286,7 +286,7 @@ function renderSettings() {
             <legend>chatgpt2api 上游</legend>
             <label>API Key<input id="apiKeyInput" type="password" placeholder="${escapeHtml(upstreams.chatgpt2api?.apiKeyMask || "不修改则留空")}"></label>
             <label>API 地址<input id="apiBaseUrlInput" value="${escapeHtml(upstreams.chatgpt2api?.apiBaseUrl || "")}" placeholder="http://chatgpt2api:80/v1"></label>
-            <label>模型<input id="modelInput" value="${escapeHtml(upstreams.chatgpt2api?.model || settings.model || "GPT-IMAGE-2")}"></label>
+            <label>模型<input id="modelInput" value="${escapeHtml(upstreams.chatgpt2api?.model || settings.model || "gpt-image-2")}"></label>
             <div class="upstream-actions">
               <button class="tiny" type="button" data-test-upstream="chatgpt2api">测试 chatgpt2api</button>
               <button id="clearKeyBtn" class="tiny secondary" type="button">清除该 Key</button>

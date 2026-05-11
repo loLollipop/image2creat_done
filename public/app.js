@@ -51,8 +51,6 @@ const i18n = {
     brand: "Image Studio",
     promptLibrary: "提示词库",
     imageEditor: "图片编辑",
-    contact: "联系管理员",
-    admin: "后台",
     myWorks: "我的作品",
     login: "登录",
     logout: "退出",
@@ -114,8 +112,6 @@ const i18n = {
     creditsTitle: "每日签到",
     creditsBalance: "当前积分",
     oneCredit: "每次生成消耗积分",
-    contactTitle: "联系管理员",
-    contactDesc: "扫码添加管理员微信",
     contactInput: "微信号 / QQ / 邮箱 / 手机号",
     messageInput: "留言内容（选填）",
     submit: "提交",
@@ -176,8 +172,6 @@ const i18n = {
     brand: "Image Studio",
     promptLibrary: "Prompts",
     imageEditor: "Image Editor",
-    contact: "Contact",
-    admin: "Admin",
     myWorks: "My Works",
     login: "Login",
     logout: "Logout",
@@ -239,8 +233,6 @@ const i18n = {
     creditsTitle: "Daily Check-in",
     creditsBalance: "Balance",
     oneCredit: "Credits per image",
-    contactTitle: "Contact Admin",
-    contactDesc: "Scan the QR code to contact the admin",
     contactInput: "WeChat / Email / Phone",
     messageInput: "Message (optional)",
     submit: "Submit",
@@ -424,12 +416,10 @@ const elements = {
   brandBtn: $("#brandBtn"),
   promptLibraryBtn: $("#promptLibraryBtn"),
   imageEditorBtn: $("#imageEditorBtn"),
-  contactBtn: $("#contactBtn"),
   langBtn: $("#langBtn"),
   creditsBtn: $("#creditsBtn"),
   creditsText: $("#creditsText"),
   myWorksBtn: $("#myWorksBtn"),
-  adminBtn: $("#adminBtn"),
   loginBtn: $("#loginBtn"),
   logoutBtn: $("#logoutBtn"),
   apiStatus: $("#apiStatus"),
@@ -547,12 +537,11 @@ function updateNav() {
   elements.logoutBtn.classList.toggle("hidden", !loggedIn);
   elements.creditsBtn.classList.toggle("hidden", !loggedIn);
   elements.myWorksBtn.classList.toggle("hidden", !loggedIn);
-  elements.adminBtn.classList.toggle("hidden", state.user?.role !== "admin");
   elements.creditsText.textContent = state.user ? `${text("credits")} ${state.user.credits}` : "0";
 
   const hasApiKey = Boolean(state.settings?.hasApiKey);
   elements.apiStatus.textContent = hasApiKey
-    ? "GPT-IMAGE-2"
+    ? "gpt-image-2"
     : state.lang === "zh"
       ? "后台未配置 API Key"
       : "API key not configured";
@@ -792,7 +781,7 @@ function syncComposers(sourceForm) {
       $(".public-input", form).checked = state.publishToSquare;
     }
     updateCustomSizeVisibility(form);
-    $(".model-label", form).textContent = "GPT-IMAGE-2";
+    $(".model-label", form).textContent = "gpt-image-2";
     $(".send-button", form).disabled = state.generating || !state.settings?.hasApiKey;
   });
 }
@@ -1968,24 +1957,6 @@ async function submitCheckin(event) {
   }
 }
 
-function openContactModal() {
-  openModal(`
-    <section class="modal">
-      <button class="close-modal" type="button"><i class="ri-close-line"></i></button>
-      <div class="modal-title">
-        <i class="ri-customer-service-2-line" style="color:#1677ff"></i>
-        <h2>${text("contactTitle")}</h2>
-        <p>${text("contactDesc")}</p>
-      </div>
-      <div class="contact-card">
-        <img src="/wx.jpg" alt="${escapeHtml(text("contactTitle"))}" class="contact-qr">
-      </div>
-      <button class="modal-secondary" type="button" data-close-auth>${text("close")}</button>
-    </section>
-  `);
-  $("[data-close-auth]", elements.modalLayer).addEventListener("click", closeModal);
-}
-
 async function openAdminModal() {
   if (state.user?.role !== "admin") return;
   openModal(`
@@ -2001,7 +1972,7 @@ async function openAdminModal() {
           <form id="settingsForm" class="admin-form">
         <label>${text("apiKey")}<input id="apiKeyInput" type="password" placeholder="Your API key"></label>
         <label>${text("apiBaseUrl")}<input id="apiBaseUrlInput" placeholder="AI API base URL"></label>
-            <label>${text("model")}<input id="modelInput" placeholder="GPT-IMAGE-2"></label>
+            <label>${text("model")}<input id="modelInput" placeholder="gpt-image-2"></label>
             <label>${text("defaultCredits")}<input id="defaultCreditsInput" type="number" min="0"></label>
             <label>${text("generationCost")}<input id="generationCreditCostInput" type="number" min="0"></label>
             <label>${text("maxImages")}<input id="maxImagesInput" type="number" min="1" max="4"></label>
@@ -2041,7 +2012,7 @@ async function loadAdminSettings() {
   const settings = await api("/api/admin/settings");
   state.settings = settings;
   $("#apiBaseUrlInput").value = settings.apiBaseUrl || "";
-  $("#modelInput").value = settings.model || "GPT-IMAGE-2";
+  $("#modelInput").value = settings.model || "gpt-image-2";
   $("#defaultCreditsInput").value = settings.defaultCredits ?? 10;
   $("#generationCreditCostInput").value = settings.generationCreditCost ?? 1;
   $("#maxImagesInput").value = settings.maxImagesPerRequest ?? 1;
@@ -2167,7 +2138,6 @@ function bindGlobalEvents() {
   elements.promptLibraryBtn.addEventListener("click", () => setView("library"));
   elements.imageEditorBtn.addEventListener("click", () => openImageEditor());
   elements.openLibraryInlineBtn.addEventListener("click", () => setView("library"));
-  elements.contactBtn.addEventListener("click", openContactModal);
   elements.langBtn.addEventListener("click", () => {
     state.lang = state.lang === "zh" ? "en" : "zh";
     localStorage.setItem("lang", state.lang);
@@ -2177,9 +2147,6 @@ function bindGlobalEvents() {
   elements.logoutBtn.addEventListener("click", logout);
   elements.creditsBtn.addEventListener("click", openCreditsModal);
   elements.myWorksBtn.addEventListener("click", openMyWorksModal);
-  elements.adminBtn.addEventListener("click", () => {
-    window.location.href = "/admin";
-  });
   elements.librarySearchForm.addEventListener("submit", (event) => {
     event.preventDefault();
     state.librarySearch = elements.librarySearchInput.value;
