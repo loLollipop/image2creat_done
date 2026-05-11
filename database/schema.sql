@@ -182,6 +182,6 @@ INSERT IGNORE INTO app_settings
    cpa_api_key, cpa_api_base_url, cpa_model, active_upstream,
    default_credits, generation_credit_cost, allow_registration, require_approval, max_images_per_request)
 VALUES
-  (1, '', '', 'GPT-IMAGE-2',
+  (1, '', '', 'gpt-image-2',
    '', '', '', 'chatgpt2api',
    10, 1, 1, 0, 1);

@@ -38,7 +38,7 @@ const GENERATED_DIR = path.join(DATA_DIR, "generated");
 const PORT = Number(process.env.PORT || 3000);
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
-const DEFAULT_MODEL = "GPT-IMAGE-2";
+const DEFAULT_MODEL = "gpt-image-2";
 const CHECKIN_CREDIT = Number.parseInt(process.env.CHECKIN_CREDIT || "1", 10) || 1;
 
 const UPSTREAM_MOUNT_PATH = "/upstream";

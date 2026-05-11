@@ -56,7 +56,7 @@ async function main() {
   });
 
   const health = await waitForServer();
-  assert.equal(health.settings.model, process.env.IMAGE_MODEL || "GPT-IMAGE-2");
+  assert.equal(health.settings.model, process.env.IMAGE_MODEL || "gpt-image-2");
 
   const missingAuth = await request("/api/images/generate", {
     method: "POST",
@@ -106,7 +106,7 @@ async function main() {
     body: JSON.stringify({
       openaiApiKey: "test-local-only",
       apiBaseUrl: "https://example.test",
-      model: "GPT-IMAGE-2",
+      model: "gpt-image-2",
       defaultCredits: 12,
       generationCreditCost: 2,
       maxImagesPerRequest: 2,

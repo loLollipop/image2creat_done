@@ -21,7 +21,7 @@ const mockUsers = [{
 const mockSessions = new Map();
 let mockSettings = {
   hasApiKey: true,
-  model: "GPT-IMAGE-2",
+  model: "gpt-image-2",
   allowRegistration: true,
   requireApproval: false,
   defaultCredits: 10,
@@ -109,7 +109,7 @@ async function samplePrompts(limit = 12) {
     return (data.prompts || []).slice(0, limit).map((prompt) => ({
       id: `sample_${prompt.id}`,
       prompt: prompt.prompt,
-      model: "GPT-IMAGE-2",
+      model: "gpt-image-2",
       size: "auto",
       quality: "auto",
       background: "auto",
@@ -220,7 +220,7 @@ async function serve(req, res) {
       id: `mock_${Date.now()}`,
       userId: user.id,
       prompt: body.prompt || "Mock generation",
-      model: "GPT-IMAGE-2",
+      model: "gpt-image-2",
       size: body.size || "auto",
       quality: body.quality || "auto",
       background: body.background || "auto",
@@ -265,7 +265,7 @@ async function serve(req, res) {
       id: `mock_edit_${Date.now()}`,
       userId: user.id,
       prompt: body.prompt || "Mock image edit",
-      model: "GPT-IMAGE-2",
+      model: "gpt-image-2",
       size: body.size || "auto",
       quality: "auto",
       background: "auto",

@@ -102,7 +102,7 @@ services:
       # Reverse proxy the chatgpt2api admin UI at /upstream/* so admins
       # can manage the account pool from the same origin.
       UPSTREAM_PROXY_BASE_URL: http://chatgpt2api:80
-      IMAGE_MODEL: ${IMAGE_MODEL:-gpt-4o-image}
+      IMAGE_MODEL: ${IMAGE_MODEL:-gpt-image-2}
       DEFAULT_CREDITS: ${DEFAULT_CREDITS:-10}
       GENERATION_CREDIT_COST: ${GENERATION_CREDIT_COST:-1}
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}

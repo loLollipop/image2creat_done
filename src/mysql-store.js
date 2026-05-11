@@ -8,7 +8,7 @@ try {
 const crypto = require("crypto");
 
 let pool;
-let defaultModel = "GPT-IMAGE-2";
+let defaultModel = "gpt-image-2";
 
 function newId(prefix = "") {
   return `${prefix}${crypto.randomBytes(12).toString("hex")}`;
