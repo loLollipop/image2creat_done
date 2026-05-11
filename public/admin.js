@@ -192,6 +192,7 @@ function renderRecords() {
                 <th>提示词</th>
                 <th>IP / UA</th>
                 <th>公开</th>
+                <th>上游</th>
                 <th>状态</th>
                 <th>时间</th>
               </tr>
@@ -204,6 +205,7 @@ function renderRecords() {
                   <td class="prompt-cell">${escapeHtml(record.prompt)}${record.errorMessage ? `<br><span class="muted">错误：${escapeHtml(record.errorMessage)}</span>` : ""}</td>
                   <td><strong>${escapeHtml(record.ipAddress || "-")}</strong><br><span class="muted">${escapeHtml(record.userAgent || "-")}</span></td>
                   <td>${record.isPublic ? "是" : "否"}</td>
+                  <td>${record.upstreamUsed ? `<span class="status">${escapeHtml(record.upstreamUsed)}</span>` : "-"}</td>
                   <td><span class="status ${record.status === "failed" ? "failed" : ""}">${escapeHtml(record.status)}</span></td>
                   <td>${fmt(record.createdAt)}</td>
                 </tr>
@@ -267,31 +269,69 @@ function renderUsers() {
 
 function renderSettings() {
   const settings = state.settings || {};
+  const upstreams = settings.upstreams || { chatgpt2api: {}, cpa: {} };
+  const active = settings.activeUpstream || "chatgpt2api";
   $("#panel").innerHTML = `
     <div class="grid">
       <section class="card">
         <h2>接口设置</h2>
         <form id="settingsForm" class="form">
-          <label>OpenAI API Key<input id="apiKeyInput" type="password" placeholder="${escapeHtml(settings.apiKeyMask || "不修改则留空")}"></label>
-        <label>API 地址<input id="apiBaseUrlInput" value="${escapeHtml(settings.apiBaseUrl || "")}" placeholder="AI API base URL"></label>
-          <label>模型<input id="modelInput" value="${escapeHtml(settings.model || "GPT-IMAGE-2")}"></label>
-          <label>注册送积分<input id="defaultCreditsInput" type="number" min="0" value="${Number(settings.defaultCredits ?? 10)}"></label>
-          <label>每张图消耗积分<input id="generationCreditCostInput" type="number" min="0" value="${Number(settings.generationCreditCost ?? 1)}"></label>
-          <label>单次最大张数<input id="maxImagesInput" type="number" min="1" max="4" value="${Number(settings.maxImagesPerRequest ?? 1)}"></label>
-          <label><input id="allowRegistrationInput" type="checkbox" ${settings.allowRegistration ? "checked" : ""}> 开放注册</label>
-          <label><input id="requireApprovalInput" type="checkbox" ${settings.requireApproval ? "checked" : ""}> 新用户需要后台启用</label>
+          <fieldset class="upstream-group">
+            <legend>当前启用上游</legend>
+            <label><input type="radio" name="activeUpstream" value="chatgpt2api" ${active === "chatgpt2api" ? "checked" : ""}> chatgpt2api（默认，docker-compose 内置反代）</label>
+            <label><input type="radio" name="activeUpstream" value="cpa" ${active === "cpa" ? "checked" : ""}> CPA（CLIProxyAPI / OpenAI 兼容 Bearer）</label>
+          </fieldset>
+
+          <fieldset class="upstream-group">
+            <legend>chatgpt2api 上游</legend>
+            <label>API Key<input id="apiKeyInput" type="password" placeholder="${escapeHtml(upstreams.chatgpt2api?.apiKeyMask || "不修改则留空")}"></label>
+            <label>API 地址<input id="apiBaseUrlInput" value="${escapeHtml(upstreams.chatgpt2api?.apiBaseUrl || "")}" placeholder="http://chatgpt2api:80/v1"></label>
+            <label>模型<input id="modelInput" value="${escapeHtml(upstreams.chatgpt2api?.model || settings.model || "GPT-IMAGE-2")}"></label>
+            <div class="upstream-actions">
+              <button class="tiny" type="button" data-test-upstream="chatgpt2api">测试 chatgpt2api</button>
+              <button id="clearKeyBtn" class="tiny secondary" type="button">清除该 Key</button>
+              <span class="muted upstream-test-result" data-test-result="chatgpt2api"></span>
+            </div>
+          </fieldset>
+
+          <fieldset class="upstream-group">
+            <legend>CPA 上游</legend>
+            <label>API Key<input id="cpaApiKeyInput" type="password" placeholder="${escapeHtml(upstreams.cpa?.apiKeyMask || "不修改则留空")}"></label>
+            <label>API 地址<input id="cpaApiBaseUrlInput" value="${escapeHtml(upstreams.cpa?.apiBaseUrl || "")}" placeholder="https://your-cpa.example.com/v1"></label>
+            <label>模型<input id="cpaModelInput" value="${escapeHtml(upstreams.cpa?.model || "")}" placeholder="gpt-image-2"></label>
+            <div class="upstream-actions">
+              <button class="tiny" type="button" data-test-upstream="cpa">测试 CPA</button>
+              <button id="clearCpaKeyBtn" class="tiny secondary" type="button">清除该 Key</button>
+              <span class="muted upstream-test-result" data-test-result="cpa"></span>
+            </div>
+          </fieldset>
+
+          <fieldset class="upstream-group">
+            <legend>其它</legend>
+            <label>注册送积分<input id="defaultCreditsInput" type="number" min="0" value="${Number(settings.defaultCredits ?? 10)}"></label>
+            <label>每张图消耗积分<input id="generationCreditCostInput" type="number" min="0" value="${Number(settings.generationCreditCost ?? 1)}"></label>
+            <label>单次最大张数<input id="maxImagesInput" type="number" min="1" max="4" value="${Number(settings.maxImagesPerRequest ?? 1)}"></label>
+            <label><input id="allowRegistrationInput" type="checkbox" ${settings.allowRegistration ? "checked" : ""}> 开放注册</label>
+            <label><input id="requireApprovalInput" type="checkbox" ${settings.requireApproval ? "checked" : ""}> 新用户需要后台启用</label>
+          </fieldset>
+
           <button class="primary" type="submit">保存设置</button>
-          <button id="clearKeyBtn" class="secondary" type="button">清除 API Key</button>
         </form>
       </section>
       <section class="card">
         <h2>说明</h2>
-        <p class="muted">前台生图会按“每张图消耗积分”扣除积分；用户每天可在前台签到领取 1 积分。用户积分可在用户管理中直接设置，也可以用增减积分输入框做临时加减。</p>
+        <p class="muted">两组上游可以同时填写，但每次生图只会用「当前启用上游」那一组。切换后立即生效，已经在跑的请求不受影响。点击「测试」会用对应 Key 调用上游的 <code>/v1/models</code> 做连通性检查。</p>
+        <p class="muted">CPA 上游需要 OpenAI 兼容的 Bearer Key（CLIProxyAPI、CherryStudio、Codex 用的那种）。如果只用 CPA，可以把 chatgpt2api 容器从 docker-compose 里去掉。</p>
+        <p class="muted">前台生图按「每张图消耗积分」扣分；签到每天 1 积分。</p>
       </section>
     </div>
   `;
   $("#settingsForm").addEventListener("submit", saveSettings);
   $("#clearKeyBtn").addEventListener("click", clearKey);
+  $("#clearCpaKeyBtn").addEventListener("click", clearCpaKey);
+  document.querySelectorAll("[data-test-upstream]").forEach((btn) => {
+    btn.addEventListener("click", () => testUpstream(btn.dataset.testUpstream));
+  });
 }
 
 function renderRedeem() {
@@ -584,6 +624,7 @@ async function saveUser(row) {
 
 async function saveSettings(event) {
   event.preventDefault();
+  const activeUpstreamInput = document.querySelector('input[name="activeUpstream"]:checked');
   try {
     state.settings = await api("/api/admin/settings", {
       method: "PATCH",
@@ -591,6 +632,10 @@ async function saveSettings(event) {
         openaiApiKey: $("#apiKeyInput").value.trim(),
         apiBaseUrl: $("#apiBaseUrlInput").value.trim(),
         model: $("#modelInput").value.trim(),
+        cpaApiKey: $("#cpaApiKeyInput").value.trim(),
+        cpaApiBaseUrl: $("#cpaApiBaseUrlInput").value.trim(),
+        cpaModel: $("#cpaModelInput").value.trim(),
+        activeUpstream: activeUpstreamInput?.value || "chatgpt2api",
         defaultCredits: Number($("#defaultCreditsInput").value || 0),
         generationCreditCost: Number($("#generationCreditCostInput").value || 0),
         maxImagesPerRequest: Number($("#maxImagesInput").value || 1),
@@ -611,10 +656,48 @@ async function clearKey() {
       method: "PATCH",
       body: JSON.stringify({ clearApiKey: true })
     });
-    toast("API Key 已清除");
+    toast("chatgpt2api API Key 已清除");
     renderSettings();
   } catch (error) {
     toast(error.message);
+  }
+}
+
+async function clearCpaKey() {
+  try {
+    state.settings = await api("/api/admin/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ clearCpaApiKey: true })
+    });
+    toast("CPA API Key 已清除");
+    renderSettings();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function testUpstream(upstream) {
+  const resultEl = document.querySelector(`[data-test-result="${upstream}"]`);
+  if (resultEl) {
+    resultEl.textContent = "测试中…";
+    resultEl.classList.remove("failed", "ok");
+  }
+  try {
+    const data = await api("/api/admin/settings/test", {
+      method: "POST",
+      body: JSON.stringify({ upstream })
+    });
+    if (resultEl) {
+      resultEl.textContent = data.ok
+        ? `✓ ${data.message || "连通"}`
+        : `✗ ${data.message || `HTTP ${data.status}`}`;
+      resultEl.classList.add(data.ok ? "ok" : "failed");
+    }
+  } catch (error) {
+    if (resultEl) {
+      resultEl.textContent = `✗ ${error.message}`;
+      resultEl.classList.add("failed");
+    }
   }
 }
 

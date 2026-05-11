@@ -71,11 +71,22 @@ function toIso(value) {
   return new Date(value).toISOString();
 }
 
+function normalizeActiveUpstream(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return raw === "cpa" ? "cpa" : "chatgpt2api";
+}
+
 function mapSettings(row = {}) {
   return {
+    // chatgpt2api preset (legacy columns)
     openaiApiKey: row.openai_api_key || "",
     apiBaseUrl: row.api_base_url || process.env.AI_API_BASE_URL || process.env.OPENAI_BASE_URL || "",
     model: row.model || defaultModel,
+    // CPA preset (CLIProxyAPI-compatible OpenAI bearer key)
+    cpaApiKey: row.cpa_api_key || "",
+    cpaApiBaseUrl: row.cpa_api_base_url || process.env.CPA_API_BASE_URL || "",
+    cpaModel: row.cpa_model || process.env.CPA_IMAGE_MODEL || "",
+    activeUpstream: normalizeActiveUpstream(row.active_upstream || process.env.ACTIVE_UPSTREAM),
     defaultCredits: Number(row.default_credits ?? 10),
     generationCreditCost: Number(row.generation_credit_cost ?? 1),
     allowRegistration: Boolean(row.allow_registration ?? 1),
@@ -126,6 +137,7 @@ function mapGeneration(row) {
     isPublic: Boolean(row.is_public ?? 0),
     revisedPrompt: row.revised_prompt || "",
     usage,
+    upstreamUsed: row.upstream_used || "",
     createdAt: toIso(row.created_at)
   };
 }
@@ -155,6 +167,7 @@ function mapGenerationRequest(row) {
     generationIds,
     model: row.model || "",
     filename: row.filename || "",
+    upstreamUsed: row.upstream_used || "",
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at)
   };
@@ -186,6 +199,10 @@ async function runMigrations() {
       openai_api_key TEXT NULL,
       api_base_url VARCHAR(255) NOT NULL DEFAULT '',
       model VARCHAR(80) NOT NULL,
+      cpa_api_key TEXT NULL,
+      cpa_api_base_url VARCHAR(255) NOT NULL DEFAULT '',
+      cpa_model VARCHAR(80) NOT NULL DEFAULT '',
+      active_upstream VARCHAR(16) NOT NULL DEFAULT 'chatgpt2api',
       default_credits INT UNSIGNED NOT NULL DEFAULT 10,
       generation_credit_cost INT UNSIGNED NOT NULL DEFAULT 1,
       allow_registration TINYINT(1) NOT NULL DEFAULT 1,
@@ -204,6 +221,23 @@ async function runMigrations() {
   const [settingsCostColumns] = await db.execute("SHOW COLUMNS FROM app_settings LIKE 'generation_credit_cost'");
   if (!settingsCostColumns.length) {
     await db.query("ALTER TABLE app_settings ADD COLUMN generation_credit_cost INT UNSIGNED NOT NULL DEFAULT 1 AFTER default_credits");
+  }
+
+  const [settingsCpaKeyColumns] = await db.execute("SHOW COLUMNS FROM app_settings LIKE 'cpa_api_key'");
+  if (!settingsCpaKeyColumns.length) {
+    await db.query("ALTER TABLE app_settings ADD COLUMN cpa_api_key TEXT NULL AFTER model");
+  }
+  const [settingsCpaBaseColumns] = await db.execute("SHOW COLUMNS FROM app_settings LIKE 'cpa_api_base_url'");
+  if (!settingsCpaBaseColumns.length) {
+    await db.query("ALTER TABLE app_settings ADD COLUMN cpa_api_base_url VARCHAR(255) NOT NULL DEFAULT '' AFTER cpa_api_key");
+  }
+  const [settingsCpaModelColumns] = await db.execute("SHOW COLUMNS FROM app_settings LIKE 'cpa_model'");
+  if (!settingsCpaModelColumns.length) {
+    await db.query("ALTER TABLE app_settings ADD COLUMN cpa_model VARCHAR(80) NOT NULL DEFAULT '' AFTER cpa_api_base_url");
+  }
+  const [settingsActiveColumns] = await db.execute("SHOW COLUMNS FROM app_settings LIKE 'active_upstream'");
+  if (!settingsActiveColumns.length) {
+    await db.query("ALTER TABLE app_settings ADD COLUMN active_upstream VARCHAR(16) NOT NULL DEFAULT 'chatgpt2api' AFTER cpa_model");
   }
 
   await db.query(`
@@ -250,6 +284,7 @@ async function runMigrations() {
       is_public TINYINT(1) NOT NULL DEFAULT 0,
       revised_prompt TEXT NULL,
       usage_json LONGTEXT NULL,
+      upstream_used VARCHAR(16) NOT NULL DEFAULT '',
       created_at DATETIME(3) NOT NULL,
       INDEX idx_generations_user_created (user_id, created_at),
       INDEX idx_generations_created_at (created_at),
@@ -260,6 +295,11 @@ async function runMigrations() {
   const [generationColumns] = await db.execute("SHOW COLUMNS FROM generations LIKE 'is_public'");
   if (!generationColumns.length) {
     await db.query("ALTER TABLE generations ADD COLUMN is_public TINYINT(1) NOT NULL DEFAULT 0 AFTER filename");
+  }
+
+  const [generationUpstreamColumns] = await db.execute("SHOW COLUMNS FROM generations LIKE 'upstream_used'");
+  if (!generationUpstreamColumns.length) {
+    await db.query("ALTER TABLE generations ADD COLUMN upstream_used VARCHAR(16) NOT NULL DEFAULT '' AFTER usage_json");
   }
 
   await db.query(`
@@ -368,12 +408,18 @@ async function runMigrations() {
 
   await db.execute(
     `INSERT IGNORE INTO app_settings
-      (id, openai_api_key, api_base_url, model, default_credits, generation_credit_cost, allow_registration, require_approval, max_images_per_request)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, openai_api_key, api_base_url, model,
+       cpa_api_key, cpa_api_base_url, cpa_model, active_upstream,
+       default_credits, generation_credit_cost, allow_registration, require_approval, max_images_per_request)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "",
       process.env.AI_API_BASE_URL || process.env.OPENAI_BASE_URL || "",
       process.env.IMAGE_MODEL || defaultModel,
+      process.env.CPA_API_KEY || "",
+      process.env.CPA_API_BASE_URL || "",
+      process.env.CPA_IMAGE_MODEL || "",
+      normalizeActiveUpstream(process.env.ACTIVE_UPSTREAM),
       intEnv("DEFAULT_CREDITS", 10),
       intEnv("GENERATION_CREDIT_COST", 1),
       boolEnv("ALLOW_REGISTRATION", true) ? 1 : 0,
@@ -387,6 +433,22 @@ async function runMigrations() {
     await db.execute(
       "UPDATE app_settings SET api_base_url = ? WHERE id = 1 AND api_base_url = ''",
       [envApiBaseUrl.replace(/\/+$/, "")]
+    );
+  }
+
+  const envCpaBaseUrl = (process.env.CPA_API_BASE_URL || "").trim();
+  if (envCpaBaseUrl) {
+    await db.execute(
+      "UPDATE app_settings SET cpa_api_base_url = ? WHERE id = 1 AND cpa_api_base_url = ''",
+      [envCpaBaseUrl.replace(/\/+$/, "")]
+    );
+  }
+
+  const envCpaModel = (process.env.CPA_IMAGE_MODEL || "").trim();
+  if (envCpaModel) {
+    await db.execute(
+      "UPDATE app_settings SET cpa_model = ? WHERE id = 1 AND cpa_model = ''",
+      [envCpaModel.slice(0, 80)]
     );
   }
 }
@@ -421,6 +483,10 @@ async function updateSettings(patch) {
     openaiApiKey: "openai_api_key",
     apiBaseUrl: "api_base_url",
     model: "model",
+    cpaApiKey: "cpa_api_key",
+    cpaApiBaseUrl: "cpa_api_base_url",
+    cpaModel: "cpa_model",
+    activeUpstream: "active_upstream",
     defaultCredits: "default_credits",
     generationCreditCost: "generation_credit_cost",
     allowRegistration: "allow_registration",
@@ -803,8 +869,8 @@ async function insertGenerations(generations) {
     for (const generation of generations) {
       await connection.execute(
         `INSERT INTO generations
-          (id, user_id, prompt, model, size, quality, background, output_format, filename, is_public, revised_prompt, usage_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, user_id, prompt, model, size, quality, background, output_format, filename, is_public, revised_prompt, usage_json, upstream_used, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           generation.id,
           generation.userId,
@@ -818,6 +884,7 @@ async function insertGenerations(generations) {
           generation.isPublic ? 1 : 0,
           generation.revisedPrompt || "",
           generation.usage ? JSON.stringify(generation.usage) : null,
+          generation.upstreamUsed || "",
           new Date(generation.createdAt)
         ]
       );
@@ -882,7 +949,7 @@ async function updateGenerationRequest(id, patch) {
 async function listGenerationRequests(limit = 100) {
   const normalizedLimit = Math.max(1, Math.min(500, Number(limit) || 100));
   const [rows] = await getPool().execute(
-    `SELECT gr.*, u.name AS user_name, u.email AS user_email, g.model, g.filename
+    `SELECT gr.*, u.name AS user_name, u.email AS user_email, g.model, g.filename, g.upstream_used
        FROM generation_requests gr
        LEFT JOIN users u ON u.id = gr.user_id
        LEFT JOIN generations g ON g.id = gr.first_generation_id
