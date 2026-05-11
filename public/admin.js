@@ -163,16 +163,14 @@ function renderUpstream() {
   `;
 }
 
-const ACCOUNT_STATUS_LABEL = {
-  normal: "正常",
-  limited: "限流",
-  abnormal: "异常",
-  disabled: "已禁用"
-};
+// chatgpt2api stores account.status as one of these four Chinese strings:
+//   "正常" (normal) / "限流" (rate-limited) /
+//   "异常" (abnormal)  / "禁用"  (disabled)
+const ACCOUNT_STATUSES = ["正常", "限流", "异常", "禁用"];
 
 function accountStatusClass(status) {
-  if (status === "normal") return "";
-  if (status === "limited") return "warn";
+  if (status === "正常") return "";
+  if (status === "限流") return "warn";
   return "failed";
 }
 
@@ -215,9 +213,9 @@ function renderAccounts() {
             </thead>
             <tbody>
               ${items.map((account) => {
-                const statusKey = String(account.status || "").toLowerCase();
-                const statusLabel = ACCOUNT_STATUS_LABEL[statusKey] || account.status || "-";
-                const statusClass = accountStatusClass(statusKey);
+                const statusValue = String(account.status || "");
+                const statusLabel = statusValue || "-";
+                const statusClass = accountStatusClass(statusValue);
                 return `
                   <tr data-token="${escapeHtml(account.access_token || "")}">
                     <td><strong>${escapeHtml(account.email || account.name || "-")}</strong></td>
@@ -352,10 +350,9 @@ function openEditAccountDialog(token) {
       <p class="muted">${escapeHtml(account.email || account.name || "")} <code>${escapeHtml(tokenPreview(account.access_token))}</code></p>
       <label>状态
         <select id="editAccountStatus">
-          <option value="normal" ${account.status === "normal" ? "selected" : ""}>正常</option>
-          <option value="limited" ${account.status === "limited" ? "selected" : ""}>限流</option>
-          <option value="abnormal" ${account.status === "abnormal" ? "selected" : ""}>异常</option>
-          <option value="disabled" ${account.status === "disabled" ? "selected" : ""}>禁用</option>
+          ${ACCOUNT_STATUSES.map((value) => `
+            <option value="${value}" ${account.status === value ? "selected" : ""}>${value}</option>
+          `).join("")}
         </select>
       </label>
       <label>类型 <input id="editAccountType" value="${escapeHtml(account.type || "")}"></label>
