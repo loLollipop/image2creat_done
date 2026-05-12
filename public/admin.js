@@ -916,7 +916,7 @@ function renderBackups() {
       <div class="upstream-header">
         <div>
           <h2>备份（chatgpt2api）</h2>
-          <p class="muted">使用 chatgpt2api 内置的备份服务。备份内容默认包括 <code>data/</code> 下的账号、注册任务、日志、生成图。备份类型与目标在「上游系统设置」的 <code>backup</code> 字段配置（local / s3 / webdav 等）。</p>
+          <p class="muted">使用 chatgpt2api 内置的备份服务。备份内容默认包括 <code>data/</code> 下的账号、注册任务、日志、生成图。备份目标在「上游系统设置」的 <code>backup</code> 字段配置；当前 chatgpt2api 仅支持 <code>cloudflare_r2</code>，需要填上 Account ID / Access Key / Bucket 才能成功执行。</p>
         </div>
         <div class="upstream-header-actions">
           <button class="secondary" type="button" id="backupsReload">刷新</button>

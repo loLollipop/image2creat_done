@@ -44,7 +44,7 @@ All observed status codes for the native-admin flow:
 |---|---|
 | `GET /` | 200 (frontend) |
 | `GET /admin` | 200 (login form if anonymous, dashboard otherwise) |
-| `GET /upstream/` | 404 (reverse proxy was removed in PR #12) |
+| `GET /upstream/` | 200 — falls through to the SPA index.html (chatgpt2api admin is no longer reachable via this path; the reverse proxy was removed in PR #12) |
 | `GET /api/admin/upstream/accounts` (anonymous) | 401 |
 | `GET /api/admin/upstream/logs` (anonymous) | 401 |
 | `GET /api/admin/upstream/register` (anonymous) | 401 |
@@ -95,7 +95,7 @@ Then primary flow:
 6. Click 注册机 — form with mode / total / threads / mail JSON + 启动 / 停止 / 重置 buttons. 启动 makes the status badge flip to 运行中 and stats update every ≤2s. 停止 returns to 已停止.
 7. Click 上游设置 — JSON editor shows chatgpt2api's `config.json`. Edit → 保存 round-trips. Try 测试代理 with a blank URL → should return JSON result.
 8. Click 备份 — table of existing backups (initially empty). Click 立即备份 → watch 状态 flip to 正在备份 then to a new row.
-9. Sanity: navigate to `http://localhost:3000/upstream/` directly — should be 404 (proxy is gone).
+9. Sanity: navigate to `http://localhost:3000/upstream/` directly. The reverse proxy is gone in PR #12, so this path no longer reaches chatgpt2api admin; it falls through to the GPT Image Studio SPA index.html instead. If it ever renders a chatgpt2api admin page, the proxy was reintroduced and needs investigation.
 
 ## What you cannot test without external resources
 
