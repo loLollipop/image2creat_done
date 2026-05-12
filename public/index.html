@@ -11,6 +11,17 @@
   </head>
   <body>
     <div id="app" class="app">
+      <!-- ===== Conversation Sidebar (overlay, toggled) ===== -->
+      <aside id="convSidebar" class="conv-sidebar hidden">
+        <div class="conv-sidebar-header">
+          <strong>对话记录</strong>
+          <button id="convSidebarClose" type="button" class="conv-sidebar-close"><i class="ri-close-line"></i></button>
+        </div>
+        <button id="convNewBtn" class="conv-new-btn" type="button"><i class="ri-add-line"></i> 新对话</button>
+        <div id="convList" class="conv-list"></div>
+      </aside>
+      <div id="convOverlay" class="conv-overlay hidden"></div>
+
       <div class="ambient" aria-hidden="true"></div>
 
       <header class="topbar">
@@ -35,6 +46,10 @@
           <button id="myWorksBtn" class="nav-pill hidden" type="button">
             <i class="ri-gallery-view-2"></i>
             <span data-i18n="myWorks">我的作品</span>
+          </button>
+          <button id="convSidebarBtn" class="nav-pill hidden" type="button">
+            <i class="ri-chat-history-line"></i>
+            <span>对话</span>
           </button>
           <button id="loginBtn" class="dark-pill" type="button">
             <i class="ri-login-circle-line"></i>
