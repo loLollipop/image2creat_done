@@ -19,17 +19,26 @@ function isConfigured() {
   return Boolean(baseUrl && authKey);
 }
 
-function buildAdminUrl(path) {
+function buildAdminUrl(path, query = null) {
   const { baseUrl } = getConfig();
   if (!baseUrl) throw new Error("UPSTREAM_PROXY_BASE_URL is not configured");
   const clean = path.startsWith("/") ? path : `/${path}`;
-  return new URL(`${ADMIN_BASE_PATH}${clean}`, baseUrl);
+  const url = new URL(`${ADMIN_BASE_PATH}${clean}`, baseUrl);
+  if (query && typeof query === "object") {
+    for (const [key, value] of Object.entries(query)) {
+      if (value === undefined || value === null) continue;
+      const str = String(value);
+      if (!str) continue;
+      url.searchParams.set(key, str);
+    }
+  }
+  return url;
 }
 
-async function adminRequest(method, path, body = null, { timeoutMs = 60000 } = {}) {
+async function adminRequest(method, path, body = null, { timeoutMs = 60000, query = null } = {}) {
   const { authKey } = getConfig();
   if (!authKey) throw new Error("CHATGPT2API_AUTH_KEY is not configured");
-  const url = buildAdminUrl(path);
+  const url = buildAdminUrl(path, query);
   const transport = url.protocol === "https:" ? https : http;
   const bodyStr = body !== null && body !== undefined ? JSON.stringify(body) : null;
 

@@ -42,21 +42,21 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-**单端口部署**：对外仅暴露 `:3000`。chatgpt2api 的管理面板被反向代理在 `/upstream/*` 之下，并通过我们自己的会话 + 管理员角色控制访问；它的容器端口 `127.0.0.1:8080` 仅绑定到本机，留作直连调试用，不再向公网暴露。
+**单端口部署**：对外仅暴露 `:3000`。chatgpt2api 的管理功能已经原生集成到生图站后台（号池 / 调用日志 / 注册机 / 上游设置 / 备份），不再有 iframe / 反向代理。chatgpt2api 容器端口 `127.0.0.1:8080` 仅绑定到本机，留作直连调试用。
 
 | 服务 | 暴露端口 | 说明 |
 | --- | --- | --- |
-| `app`（生图站） | http://localhost:3000 | **唯一对外端口**；`/upstream/*` 反向代理到上游 admin |
-| `chatgpt2api`（上游） | http://127.0.0.1:8080 | 仅本机可达，用作排障；正式访问请走 `/upstream/` |
+| `app`（生图站） | http://localhost:3000 | **唯一对外端口**；admin 后台原生承载所有 chatgpt2api 管理界面 |
+| `chatgpt2api`（上游） | http://127.0.0.1:8080 | 仅本机可达，用作排障；admin 不再访问 |
 | `mysql` | 3306 | 默认密码取自 `.env` 的 `MYSQL_PASSWORD` |
 
-`chatgpt2api` 服务的镜像由 [`vendor/chatgpt2api/`](vendor/chatgpt2api/) 中的源码本地构建，方便就地汉化、加埋点或调整逻辑（详见 [Vendored Upstream](#vendored-upstream-chatgpt2api)）。它在构建时被注入 `NEXT_PUBLIC_BASE_PATH=/upstream`、运行时被注入 `BASE_PATH=/upstream`，这样它的所有路由（`/api/*` 管理接口、SPA 路由、`/images/*` 静态文件、Next.js `_next/*` 资源）都挂在 `/upstream/*` 下；只有 OpenAI 兼容的 `/v1/*` 仍然在根路径，因为生图站通过 docker 网络直接调它。
+`chatgpt2api` 服务的镜像由 [`vendor/chatgpt2api/`](vendor/chatgpt2api/) 中的源码本地构建，方便就地汉化、加埋点或调整逻辑（详见 [Vendored Upstream](#vendored-upstream-chatgpt2api)）。它在构建时被注入 `NEXT_PUBLIC_BASE_PATH=/upstream`、运行时被注入 `BASE_PATH=/upstream`，把它的管理 API 全部挂在 `/upstream/api/*` 下，生图站通过 docker 网络 (`UPSTREAM_PROXY_BASE_URL=http://chatgpt2api:80`) 直接调它来支撑「号池 / 调用日志 / 注册机 / 上游设置 / 备份」这几个 tab。OpenAI 兼容的 `/v1/*` 仍然在根路径，由生图站直接调用做生图。
 
 首次启动后：
 
 1. 打开 http://localhost:3000，使用 `.env` 里的管理员邮箱密码登录。
-2. 进入「后台管理 → 上游管理」，iframe 里第一次会要求你输入 `CHATGPT2API_AUTH_KEY`（默认 `chatgpt2api`）登录上游 admin。
-3. 在 iframe 内的上游 admin 中添加至少一个 ChatGPT 账号（详见 [chatgpt2api 项目说明](https://github.com/basketikun/chatgpt2api)）。
+2. 进入「后台管理 → 号池」，添加至少一个 ChatGPT 账号 `access_token`（详见 [chatgpt2api 项目说明](https://github.com/basketikun/chatgpt2api)）。也可以走「注册机」tab 让 chatgpt2api 自动注册新号。
+3. 「调用日志」「上游设置」「备份」三个 tab 提供原本 chatgpt2api admin 面板的全部能力，无需再访问 iframe。
 4. 回到「后台管理 → 接口设置」确认 `API 地址 = http://chatgpt2api:80/v1`、`API Key = CHATGPT2API_AUTH_KEY` 已被 docker-compose 预填，无需手工修改。
 5. 注册一个普通账号，注册即送 10 积分，可以直接生图。
 
@@ -83,7 +83,7 @@ server {
 }
 ```
 
-> 不要再在 nginx 里单独转发 `:8080` —— `:8080` 已经被绑定到 docker 主机的 `127.0.0.1`，公网无法访问；上游管理走同一域名的 `/upstream/*` 即可。
+> 不要再在 nginx 里单独转发 `:8080` —— `:8080` 已经被绑定到 docker 主机的 `127.0.0.1`，公网无法访问；上游管理已经原生在 `/admin` 后台里，不需要单独路由。
 
 > ⚠️ **chatgpt2api 仅适合免费体验档**：它是 ChatGPT 网页端逆向，作者明确禁止商业用途。一旦准备收费，请换成官方 OpenAI Images API、火山豆包、智谱 CogView 等合规上游。`payments` 表与 `provider` 字段已预留，方便后续接入。
 
@@ -258,20 +258,21 @@ set MYSQL_DATABASE=gpt_image_studio_test
 node scripts/smoke-test.js
 ```
 
-## Unified admin & upstream reverse proxy
+## Native admin & 上游 admin API 通道
 
-后台多了一个 **「上游管理」** Tab，里面用 `iframe` 嵌入了 `/upstream/`，也就是 chatgpt2api 自己的管理界面。访问流程：
+后台一共有 5 个 chatgpt2api 相关 tab：**号池 / 调用日志 / 注册机 / 上游设置 / 备份**。它们都是本站原生页面，由 `server.js` 在 `/api/admin/upstream/*` 下向 chatgpt2api 的 `/upstream/api/*` 转发，访问流程：
 
-1. 浏览器请求 `https://your-domain/upstream/...`
-2. 我们的 Node 服务（`server.js`）把它 1:1 转发到 docker 网络里的 `http://chatgpt2api:80/upstream/...`
-3. 上游 FastAPI 因为运行时环境变量 `BASE_PATH=/upstream`，把所有 `/api/*`、`/images/*`、Next.js SPA 路由全部挂在 `/upstream/*` 下，所以路径不需要改写
-4. 在转发之前，Node 会检查请求者是否是登录中的本站管理员（`role=admin`、`status=active`）；非管理员一律 403
+1. 浏览器调本站接口 `https://your-domain/api/admin/upstream/...`
+2. `server.js` 先做本站会话 + 管理员鉴权（`role=admin`、`status=active`），非管理员一律 403
+3. 通过 `src/upstream-api-client.js` 加上 `Authorization: Bearer ${CHATGPT2API_AUTH_KEY}`，转发到 docker 网络里的 `http://chatgpt2api:80/upstream/api/...`
+4. 把上游 JSON / 二进制流原样返回给浏览器，前端 `public/admin.js` 渲染
 
 技术细节：
 
-- 反向代理代码在 [`src/upstream-proxy.js`](src/upstream-proxy.js)，纯 Node.js 内置 `http`/`https`，没有引入 `http-proxy-middleware` / `node-http-proxy` 之类的额外依赖。
-- 上游地址通过环境变量 `UPSTREAM_PROXY_BASE_URL` 配置（docker-compose 已经预填为 `http://chatgpt2api:80`）。如果你不部署 chatgpt2api，把这个变量留空即可禁用 `/upstream/*` 路由。
+- chatgpt2api API 客户端在 [`src/upstream-api-client.js`](src/upstream-api-client.js)，纯 Node.js 内置 `http`/`https`，没有引入 `http-proxy-middleware` / `node-http-proxy` 之类的额外依赖。
+- 上游地址通过环境变量 `UPSTREAM_PROXY_BASE_URL` 配置（docker-compose 已经预填为 `http://chatgpt2api:80`）、bearer 通过 `CHATGPT2API_AUTH_KEY`。如果你不部署 chatgpt2api，把这两个变量留空即可禁用相关 tab（接口返回 503）。
 - `OpenAI 兼容` 的 `/v1/*` 接口**保持在根路径**，所以本站调上游生图依然走 `http://chatgpt2api:80/v1/images/generations`，没有任何路径改写。
+- 旧的 `/upstream/*` 反向代理路由 + iframe 已经在原生集成完毕后下线（之前的 PR 链 #8/#9/#10/#11/#12）。
 
 ## Security Notes
 
@@ -280,7 +281,7 @@ node scripts/smoke-test.js
 - 建议生产环境开启 HTTPS，并把生成图片迁移到对象存储或 CDN。
 - 管理员后台应使用强密码，必要时放在反向代理鉴权或内网访问后面。
 - API Key 支持在后台配置，但仍建议只给可信管理员开放后台。
-- chatgpt2api 容器端口默认绑定到 `127.0.0.1:8080`（不是 `0.0.0.0:8080`），公网扫不到；正式访问统一通过 `:3000/upstream/*`。
+- chatgpt2api 容器端口默认绑定到 `127.0.0.1:8080`（不是 `0.0.0.0:8080`），公网扫不到；管理统一走生图站 `/admin` 后台原生页面，不需要再单独暴露 `/upstream/*`。
 
 ## Project Structure
 
