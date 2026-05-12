@@ -127,6 +127,7 @@ function mapGeneration(row) {
   return {
     id: row.id,
     userId: row.user_id,
+    conversationId: row.conversation_id || null,
     prompt: row.prompt,
     model: row.model,
     size: row.size,
@@ -382,6 +383,26 @@ async function runMigrations() {
       CONSTRAINT fk_redeem_codes_used_by FOREIGN KEY (used_by_user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  // === Conversations ===
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      id VARCHAR(32) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(32) NOT NULL,
+      title VARCHAR(255) NOT NULL DEFAULT '',
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      INDEX idx_conversations_user_updated (user_id, updated_at),
+      CONSTRAINT fk_conversations_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  // Add conversation_id column to generations (nullable for backward compat)
+  const [genConvCol] = await db.execute("SHOW COLUMNS FROM generations LIKE 'conversation_id'");
+  if (!genConvCol.length) {
+    await db.query("ALTER TABLE generations ADD COLUMN conversation_id VARCHAR(32) NULL AFTER user_id");
+    await db.query("ALTER TABLE generations ADD INDEX idx_generations_conversation (conversation_id)");
+  }
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS payments (
@@ -869,11 +890,12 @@ async function insertGenerations(generations) {
     for (const generation of generations) {
       await connection.execute(
         `INSERT INTO generations
-          (id, user_id, prompt, model, size, quality, background, output_format, filename, is_public, revised_prompt, usage_json, upstream_used, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, user_id, conversation_id, prompt, model, size, quality, background, output_format, filename, is_public, revised_prompt, usage_json, upstream_used, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           generation.id,
           generation.userId,
+          generation.conversationId || null,
           generation.prompt,
           generation.model,
           generation.size,
@@ -988,6 +1010,75 @@ async function countTodayGenerations() {
     "SELECT COUNT(*) AS count FROM generations WHERE created_at >= CURDATE() AND created_at < DATE_ADD(CURDATE(), INTERVAL 1 DAY)"
   );
   return Number(rows[0]?.count || 0);
+}
+
+// ----------------------------------------------------------------------------
+// Conversations
+// ----------------------------------------------------------------------------
+
+function mapConversation(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    title: row.title || "",
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at)
+  };
+}
+
+async function createConversation(userId, title = "") {
+  const id = newId("conv_");
+  const now = new Date();
+  await getPool().execute(
+    `INSERT INTO conversations (id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+    [id, userId, title.slice(0, 255), now, now]
+  );
+  return { id, userId, title, createdAt: now.toISOString(), updatedAt: now.toISOString() };
+}
+
+async function listConversations(userId, limit = 50) {
+  const normalizedLimit = Math.max(1, Math.min(200, Number(limit) || 50));
+  const [rows] = await getPool().execute(
+    `SELECT * FROM conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT ${normalizedLimit}`,
+    [userId]
+  );
+  return rows.map(mapConversation);
+}
+
+async function getConversationById(id) {
+  const [rows] = await getPool().execute("SELECT * FROM conversations WHERE id = ?", [id]);
+  return mapConversation(rows[0]);
+}
+
+async function updateConversation(id, patch) {
+  const cols = [];
+  const vals = [];
+  if (patch.title !== undefined) { cols.push("title = ?"); vals.push(String(patch.title).slice(0, 255)); }
+  if (!cols.length) return;
+  cols.push("updated_at = ?");
+  vals.push(new Date());
+  vals.push(id);
+  await getPool().execute(`UPDATE conversations SET ${cols.join(", ")} WHERE id = ?`, vals);
+}
+
+async function deleteConversation(id) {
+  // Also clear conversation_id on associated generations (don't delete the images)
+  await getPool().execute("UPDATE generations SET conversation_id = NULL WHERE conversation_id = ?", [id]);
+  await getPool().execute("DELETE FROM conversations WHERE id = ?", [id]);
+}
+
+async function touchConversation(id) {
+  await getPool().execute("UPDATE conversations SET updated_at = ? WHERE id = ?", [new Date(), id]);
+}
+
+async function listGenerationsForConversation(conversationId, limit = 100) {
+  const normalizedLimit = Math.max(1, Math.min(500, Number(limit) || 100));
+  const [rows] = await getPool().execute(
+    `SELECT * FROM generations WHERE conversation_id = ? ORDER BY created_at ASC LIMIT ${normalizedLimit}`,
+    [conversationId]
+  );
+  return rows.map(mapGeneration);
 }
 
 // ----------------------------------------------------------------------------
@@ -1389,6 +1480,13 @@ module.exports = {
   listPublicGenerations,
   getGenerationById,
   countTodayGenerations,
+  createConversation,
+  listConversations,
+  getConversationById,
+  updateConversation,
+  deleteConversation,
+  touchConversation,
+  listGenerationsForConversation,
   listCreditTransactionsForUser,
   listAllCreditTransactions,
   createRedeemCodes,
