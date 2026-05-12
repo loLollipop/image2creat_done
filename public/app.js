@@ -3,9 +3,11 @@ const state = {
   user: null,
   settings: null,
   firstRun: false,
-  view: "home",
-  forceHero: false,
+  view: "landing",
   history: [],
+  allGenerations: [],
+  activeConversationId: null,
+  workspaceMode: "create",
   generating: false,
   funIndex: 0,
   funTimer: null,
@@ -29,10 +31,12 @@ const state = {
   promptItems: [],
   promptVisible: 20,
   promptLoading: true,
+  pendingAction: null,
   editor: {
     imageUrl: "",
     imageData: "",
     prompt: "",
+    sourceGenerationId: null,
     tool: "brush",
     color: "#7c3aed",
     zoom: 1,
@@ -66,6 +70,7 @@ const i18n = {
     examplesLabel: "灵感示例",
     viewMore: "查看更多",
     placeholder: "描述你想创作的图片...",
+    startCreate: "开始创作",
     create: "生成",
     generating: "生成中...",
     reference: "参考图",
@@ -187,6 +192,7 @@ const i18n = {
     examplesLabel: "Inspiration",
     viewMore: "View more",
     placeholder: "Describe the image you want to create...",
+    startCreate: "Start creating",
     create: "Create",
     generating: "Creating...",
     reference: "Reference",
@@ -414,6 +420,7 @@ const elements = {
   modalLayer: $("#modalLayer"),
   toastLayer: $("#toastLayer"),
   brandBtn: $("#brandBtn"),
+  startCreateBtn: $("#startCreateBtn"),
   promptLibraryBtn: $("#promptLibraryBtn"),
   imageEditorBtn: $("#imageEditorBtn"),
   langBtn: $("#langBtn"),
@@ -426,6 +433,9 @@ const elements = {
   todayGeneratedText: $("#todayGeneratedText"),
   heroComposerMount: $("#heroComposerMount"),
   stickyComposerMount: $("#stickyComposerMount"),
+  workspaceNewBtn: $("#workspaceNewBtn"),
+  workspaceConvList: $("#workspaceConvList"),
+  workspaceThread: $("#workspaceThread"),
   generationStatus: $("#generationStatus"),
   funMessage: $("#funMessage"),
   historyList: $("#historyList"),
@@ -538,7 +548,6 @@ function updateNav() {
   elements.creditsBtn.classList.toggle("hidden", !loggedIn);
   elements.myWorksBtn.classList.toggle("hidden", !loggedIn);
   elements.creditsText.textContent = state.user ? `${text("credits")} ${state.user.credits}` : "0";
-  // Show/hide conversation sidebar button
   const convBtn = document.getElementById("convSidebarBtn");
   if (convBtn) convBtn.classList.toggle("hidden", !loggedIn);
 
@@ -551,23 +560,52 @@ function updateNav() {
   elements.apiStatus.style.color = hasApiKey ? "#64748b" : "#b42318";
 }
 
-function setView(view) {
-  state.view = view;
-  elements.app.classList.toggle("editor-mode", view === "editor");
-  elements.homeView.classList.toggle("hidden", view !== "home" || (!shouldShowHero() && view === "home"));
-  elements.chatView.classList.toggle("hidden", view !== "home" || shouldShowHero());
-  elements.libraryView.classList.toggle("hidden", view !== "library");
-  elements.editorView.classList.toggle("hidden", view !== "editor");
-  if (view === "library") renderLibrary();
-  if (view === "editor") renderEditor();
-  updateNav();
-  if (view === "home" && shouldShowHero()) {
-    requestAnimationFrame(playHeroVideo);
+function setWorkspaceMode(mode) {
+  state.workspaceMode = mode === "edit" ? "edit" : "create";
+  if (elements.editorView) {
+    elements.editorView.classList.toggle("hidden", state.view !== "workspace" || state.workspaceMode !== "edit");
   }
 }
 
-function shouldShowHero() {
-  return state.forceHero || state.history.length === 0;
+function setView(view) {
+  state.view = view;
+  elements.homeView.classList.toggle("hidden", view !== "landing");
+  elements.chatView.classList.toggle("hidden", view !== "workspace");
+  elements.libraryView.classList.toggle("hidden", view !== "library");
+  setWorkspaceMode(state.workspaceMode);
+  if (view === "library") renderLibrary();
+  if (view === "landing") requestAnimationFrame(playHeroVideo);
+  updateNav();
+}
+
+function resetEditorWorkspace() {
+  state.editor.imageUrl = "";
+  state.editor.imageData = "";
+  state.editor.prompt = "";
+  state.editor.sourceGenerationId = null;
+  state.editor.history = [];
+  state.editor.zoom = 1;
+}
+
+function openWorkspace(options = {}) {
+  const { prompt = "", imageUrl = "", imageData = "", openEditor = false, sourceGenerationId = "" } = options;
+  if (prompt) state.draftPrompt = prompt;
+  setView("workspace");
+  if (imageUrl || imageData) {
+    setEditorImage(imageUrl || imageData, imageData || "", sourceGenerationId || null);
+  } else if (openEditor && !sourceGenerationId) {
+    resetEditorWorkspace();
+  }
+  if (openEditor || imageUrl || imageData) {
+    state.editor.prompt = prompt || state.editor.prompt;
+    setWorkspaceMode("edit");
+    renderEditor();
+    setTimeout(() => elements.editorPromptInput?.focus(), 80);
+  } else {
+    setWorkspaceMode("create");
+    setTimeout(() => $(".prompt-box", elements.stickyComposerMount)?.focus(), 80);
+  }
+  syncComposers();
 }
 
 function renderAll() {
@@ -576,8 +614,9 @@ function renderAll() {
   renderRecentCreations();
   renderExamples();
   renderHistory();
+  renderEditor();
+  renderConvList();
   if (state.view === "library") renderLibrary();
-  if (state.view === "editor") renderEditor();
   renderComposers();
   setView(state.view);
 }
@@ -659,16 +698,12 @@ function openRecentPreview(item) {
     </section>
   `);
   $("[data-preview-use]", elements.modalLayer).addEventListener("click", () => {
-    state.draftPrompt = item.prompt;
     closeModal();
-    state.forceHero = true;
-    setView("home");
-    syncComposers();
-    setTimeout(() => $(".prompt-box", elements.heroComposerMount)?.focus(), 120);
+    openWorkspace({ prompt: item.prompt });
   });
   $("[data-preview-editor]", elements.modalLayer)?.addEventListener("click", () => {
     closeModal();
-    openImageEditor(item.image, item.prompt);
+    openImageEditor(item.image, item.prompt, item.id, item.conversationId || null);
   });
   $("[data-preview-copy]", elements.modalLayer).addEventListener("click", async () => {
     await copyText(item.prompt);
@@ -677,9 +712,6 @@ function openRecentPreview(item) {
 }
 
 function renderComposers() {
-  if (!elements.heroComposerMount.children.length) {
-    elements.heroComposerMount.appendChild(createComposer(false));
-  }
   if (!elements.stickyComposerMount.children.length) {
     elements.stickyComposerMount.appendChild(createComposer(true));
   }
@@ -706,18 +738,24 @@ function createComposer(sticky) {
       form.requestSubmit();
     }
   });
-  referenceInput.addEventListener("change", () => {
-    const files = [...referenceInput.files].slice(0, 4);
-    state.references = files.map((file) => ({
-      file,
-      url: URL.createObjectURL(file),
-      name: file.name
-    }));
-    renderReferences(referenceRow);
-    syncReferences(form);
-    if (state.references.length) {
-      showToast(state.lang === "zh" ? "已添加参考图预览，当前后端仍按文本生成" : "Reference previews added; backend currently generates from text", "ri-image-add-line");
-    }
+  referenceInput.addEventListener("change", async () => {
+    const file = referenceInput.files?.[0];
+    if (!file) return;
+    await handleEditorUpload(file);
+    state.editor.prompt = textarea.value.trim() || state.editor.prompt;
+    state.editor.sourceGenerationId = null;
+    state.references = [];
+    referenceRow.innerHTML = "";
+    referenceRow.classList.add("hidden");
+    referenceInput.value = "";
+    openWorkspace({
+      prompt: state.editor.prompt,
+      imageUrl: state.editor.imageUrl,
+      imageData: state.editor.imageData,
+      openEditor: true,
+      sourceGenerationId: null
+    });
+    showToast(state.lang === "zh" ? "已载入图片，进入继续创作模式" : "Image loaded into the editing workspace", "ri-image-add-line");
   });
   optionsToggle.addEventListener("click", () => {
     advanced.classList.toggle("hidden");
@@ -818,6 +856,11 @@ async function submitGeneration(form) {
   if (!prompt) return;
   if (!state.user) {
     state.draftPrompt = prompt;
+    state.pendingAction = {
+      type: "generate",
+      prompt,
+      conversationId: state.activeConversationId || null
+    };
     openAuthModal("login");
     return;
   }
@@ -833,6 +876,9 @@ async function submitGeneration(form) {
   const tempId = `tmp_${Date.now()}`;
   const item = {
     id: tempId,
+    conversationId: state.activeConversationId,
+    operationType: "generate",
+    sourceGenerationId: null,
     prompt,
     images: [],
     status: "generating",
@@ -842,12 +888,12 @@ async function submitGeneration(form) {
     references: state.references.map((reference) => reference.url)
   };
   state.history.push(item);
-  state.forceHero = false;
   state.generating = true;
   state.references = [];
+  setWorkspaceMode("create");
   startFunMessages();
   renderAll();
-  setView("home");
+  setView("workspace");
   scrollToBottom();
 
   try {
@@ -860,26 +906,21 @@ async function submitGeneration(form) {
         background: item.options.background,
         outputFormat: item.options.outputFormat,
         isPublic: item.isPublic,
+        conversationId: state.activeConversationId,
+        sourceGenerationId: null,
         n: 1
       })
     });
-    const generation = data.generations[0];
+    const generation = historyItemFromGeneration(data.generations[0]);
+    state.activeConversationId = data.conversationId || state.activeConversationId;
     state.history = state.history.map((entry) =>
-      entry.id === tempId
-        ? {
-            ...entry,
-            id: generation.id,
-            images: [generation.imageUrl],
-            status: "done",
-            time: generation.createdAt,
-            model: generation.model,
-            isPublic: Boolean(generation.isPublic)
-          }
-        : entry
+      entry.id === tempId ? generation : entry
     );
+    state.allGenerations = [generation, ...state.allGenerations.filter((entry) => entry.id !== generation.id)];
     state.user.credits = data.credits;
     state.stats.todayGenerated += data.generations.length;
     updateDailyMetric();
+    await loadConversations();
     if (item.isPublic) await loadPublicGallery();
     showToast(state.lang === "zh" ? "已生成" : "Created", "ri-sparkling-2-fill");
   } catch (error) {
@@ -914,40 +955,67 @@ function stopFunMessages() {
   elements.generationStatus.classList.add("hidden");
 }
 
-function scrollToBottom() {
-  setTimeout(() => window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" }), 80);
+function scrollToBottom(smooth = true) {
+  const target = elements.workspaceThread;
+  setTimeout(() => {
+    if (target) {
+      target.scrollTo({ top: target.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+      return;
+    }
+    window.scrollTo({ top: document.body.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+  }, 80);
+}
+
+function historyItemFromGeneration(generation) {
+  return {
+    id: generation.id,
+    conversationId: generation.conversationId || null,
+    operationType: generation.operationType || "generate",
+    sourceGenerationId: generation.sourceGenerationId || null,
+    prompt: generation.prompt,
+    images: [generation.imageUrl],
+    status: "done",
+    time: generation.createdAt,
+    model: generation.model,
+    isPublic: Boolean(generation.isPublic),
+    options: {
+      size: generation.size,
+      quality: generation.quality,
+      background: generation.background,
+      outputFormat: generation.outputFormat
+    }
+  };
 }
 
 async function loadHistory() {
   if (!state.user) {
     state.history = [];
+    state.allGenerations = [];
     return;
   }
   try {
     const data = await api("/api/images/history");
-    state.history = [...(data.generations || [])]
-      .reverse()
-      .map((generation) => ({
-        id: generation.id,
-        prompt: generation.prompt,
-        images: [generation.imageUrl],
-        status: "done",
-        time: generation.createdAt,
-        model: generation.model,
-        isPublic: Boolean(generation.isPublic),
-        options: {
-          size: generation.size,
-          quality: generation.quality,
-          background: generation.background,
-          outputFormat: generation.outputFormat
-        }
-      }));
+    const items = (data.generations || []).map(historyItemFromGeneration);
+    state.allGenerations = [...items].sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
+    if (!state.activeConversationId) {
+      state.history = [];
+    }
   } catch (error) {
     showToast(error.message, "ri-error-warning-line");
   }
 }
 
 function renderHistory() {
+  if (!state.history.length) {
+    elements.historyList.innerHTML = `
+      <section class="workspace-empty-state">
+        <span class="config-chip">${escapeHtml(state.activeConversationId ? "继续创作" : "新建会话")}</span>
+        <h2>${escapeHtml(state.lang === "zh" ? "在同一条会话里持续改图" : "Keep iterating in one thread")}</h2>
+        <p>${escapeHtml(state.lang === "zh" ? "输入提示词开始文生图，或直接上传一张图片进入继续创作模式。" : "Start with a prompt or upload an image to continue creating in the same thread.")}</p>
+      </section>
+    `;
+    return;
+  }
   let lastDate = "";
   elements.historyList.innerHTML = state.history.map((item) => {
     const date = formatDate(item.time);
@@ -977,7 +1045,10 @@ function renderHistory() {
       <article class="message-card fade-up">
         <div class="message-prompt">
           <i class="ri-chat-quote-line"></i>
-          <div>${escapeHtml(item.prompt)}</div>
+          <div>
+            <span class="message-mode-badge">${item.operationType === "edit" ? (state.lang === "zh" ? "继续改图" : "Edit") : (state.lang === "zh" ? "文生图" : "Generate")}</span>
+            <div>${escapeHtml(item.prompt)}</div>
+          </div>
         </div>
         <div class="message-image"><div class="image-shell">${image}</div></div>
         ${error}
@@ -989,22 +1060,24 @@ function renderHistory() {
   $$("[data-retry]", elements.historyList).forEach((button) => {
     button.addEventListener("click", () => {
       state.draftPrompt = button.dataset.retry;
+      setWorkspaceMode("create");
       syncComposers();
-      const form = $(".composer", elements.stickyComposerMount) || $(".composer", elements.heroComposerMount);
+      const form = $(".composer", elements.stickyComposerMount);
       submitGeneration(form);
     });
   });
   $$("[data-edit]", elements.historyList).forEach((button) => {
     button.addEventListener("click", () => {
       state.draftPrompt = button.dataset.edit;
+      setWorkspaceMode("create");
       syncComposers();
-      $(".prompt-box", $(".composer", elements.stickyComposerMount) || document).focus();
+      $(".prompt-box", $(".composer", elements.stickyComposerMount) || document)?.focus();
     });
   });
   $$("[data-edit-image]", elements.historyList).forEach((button) => {
     button.addEventListener("click", () => {
       const item = state.history.find((entry) => String(entry.id) === button.dataset.editImage);
-      if (item?.images?.[0]) openImageEditor(item.images[0], item.prompt);
+      if (item?.images?.[0]) openImageEditor(item.images[0], item.prompt, item.id, item.conversationId || null);
     });
   });
 }
@@ -1114,21 +1187,24 @@ function bindPromptCards(root) {
   $$("[data-use-prompt]", root).forEach((button) => {
     button.addEventListener("click", () => {
       const prompt = getPromptSource().find((item) => item.id === Number(button.dataset.usePrompt));
-      state.draftPrompt = prompt.prompt;
-      state.forceHero = true;
-      setView("home");
-      syncComposers();
-      showToast(state.lang === "zh" ? "已填入生成框" : "Sent to composer", "ri-arrow-right-line");
-      setTimeout(() => $(".prompt-box", elements.heroComposerMount)?.focus(), 120);
+      openWorkspace({ prompt: prompt.prompt });
+      showToast(state.lang === "zh" ? "已进入创作工作区" : "Sent to the workspace", "ri-arrow-right-line");
     });
   });
 }
 
-function openImageEditor(imageUrl = "", prompt = "") {
+async function openImageEditor(imageUrl = "", prompt = "", sourceGenerationId = "", conversationId = null) {
+  if (conversationId && conversationId !== state.activeConversationId) {
+    const switched = await switchToConversation(conversationId);
+    if (!switched) return;
+  } else if (!conversationId && sourceGenerationId && state.activeConversationId && !state.history.find((entry) => entry.id === sourceGenerationId)) {
+    state.activeConversationId = null;
+    state.history = [];
+  }
   state.editor.prompt = prompt || state.editor.prompt;
-  setView("editor");
-  if (imageUrl) setEditorImage(imageUrl);
-  setTimeout(() => elements.editorPromptInput?.focus(), 80);
+  state.editor.sourceGenerationId = sourceGenerationId || null;
+  if (imageUrl) setEditorImage(imageUrl, "", sourceGenerationId || null);
+  openWorkspace({ prompt: state.editor.prompt, openEditor: true, sourceGenerationId });
 }
 
 function renderEditor() {
@@ -1149,9 +1225,10 @@ function renderEditor() {
   }
 }
 
-function setEditorImage(src, imageData = "") {
+function setEditorImage(src, imageData = "", sourceGenerationId = null) {
   state.editor.imageUrl = src;
   state.editor.imageData = imageData || (src.startsWith("data:") ? src : "");
+  state.editor.sourceGenerationId = sourceGenerationId || null;
   state.editor.zoom = 1;
   state.editor.history = [];
   renderEditor();
@@ -1339,6 +1416,15 @@ function canvasHasMarks(canvas) {
 async function submitImageEdit(event) {
   event.preventDefault();
   if (!state.user) {
+    state.pendingAction = {
+      type: "edit",
+      prompt: elements.editorPromptInput.value.trim(),
+      imageUrl: state.editor.imageUrl,
+      imageData: state.editor.imageData,
+      sourceGenerationId: state.editor.sourceGenerationId,
+      conversationId: state.activeConversationId || null,
+      isPublic: elements.editorPublicInput.checked
+    };
     openAuthModal("login");
     return;
   }
@@ -1370,22 +1456,20 @@ async function submitImageEdit(event) {
           : prompt,
         imageData,
         maskData,
-        isPublic: elements.editorPublicInput.checked
+        size: state.generationOptions.size,
+        isPublic: elements.editorPublicInput.checked,
+        conversationId: state.activeConversationId,
+        sourceGenerationId: state.editor.sourceGenerationId
       })
     });
-    const generation = data.generations[0];
+    const generation = historyItemFromGeneration(data.generations[0]);
+    state.activeConversationId = data.conversationId || state.activeConversationId;
     state.user.credits = data.credits;
     state.stats.todayGenerated += 1;
-    state.history.push({
-      id: generation.id,
-      prompt: generation.prompt,
-      images: [generation.imageUrl],
-      status: "done",
-      time: generation.createdAt,
-      model: generation.model,
-      isPublic: Boolean(generation.isPublic)
-    });
-    setEditorImage(generation.imageUrl);
+    state.history.push(generation);
+    state.allGenerations = [generation, ...state.allGenerations.filter((entry) => entry.id !== generation.id)];
+    setEditorImage(generation.images[0], "", generation.id);
+    await loadConversations();
     if (generation.isPublic) await loadPublicGallery();
     renderAll();
     showToast(state.lang === "zh" ? "编辑完成" : "Edit created", "ri-magic-line");
@@ -1608,7 +1692,7 @@ async function loadMyWorks(forceReload = false) {
   if (!grid) return;
   grid.innerHTML = `<div class="empty-message">${text("loadingPrompts")}</div>`;
   if (forceReload) await loadHistory();
-  const items = [...state.history]
+  const items = [...state.allGenerations]
     .filter((item) => item.status === "done" && item.images?.[0])
     .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
   if (!items.length) {
@@ -1630,23 +1714,27 @@ async function loadMyWorks(forceReload = false) {
     </article>
   `).join("");
   $$("[data-work-retry]", grid).forEach((button) => {
-    button.addEventListener("click", () => {
-      const item = state.history.find((entry) => String(entry.id) === button.dataset.workRetry);
+    button.addEventListener("click", async () => {
+      const item = state.allGenerations.find((entry) => String(entry.id) === button.dataset.workRetry);
       if (!item) return;
       closeModal();
-      state.forceHero = true;
-      state.draftPrompt = item.prompt;
-      setView("home");
-      syncComposers();
-      setTimeout(() => submitGeneration($(".composer", elements.heroComposerMount)), 80);
+      if (item.conversationId) {
+        const switched = await switchToConversation(item.conversationId);
+        if (!switched) return;
+      } else {
+        state.activeConversationId = null;
+        state.history = [];
+      }
+      openWorkspace({ prompt: item.prompt });
+      setTimeout(() => submitGeneration($(".composer", elements.stickyComposerMount)), 80);
     });
   });
   $$("[data-work-editor]", grid).forEach((button) => {
     button.addEventListener("click", () => {
-      const item = state.history.find((entry) => String(entry.id) === button.dataset.workEditor);
+      const item = state.allGenerations.find((entry) => String(entry.id) === button.dataset.workEditor);
       if (!item?.images?.[0]) return;
       closeModal();
-      openImageEditor(item.images[0], item.prompt);
+      openImageEditor(item.images[0], item.prompt, item.id, item.conversationId || null);
     });
   });
 }
@@ -1753,11 +1841,35 @@ async function submitAuth(event) {
     state.firstRun = me.firstRun;
     state.checkin = me.checkin || state.checkin;
     await loadHistory();
+    await loadConversations();
     closeModal();
-    state.forceHero = true;
     renderAll();
-    window.scrollTo({ top: 0, behavior: "auto" });
-    restartHeroVideo();
+    if (state.pendingAction?.type === "edit") {
+      const pending = state.pendingAction;
+      state.pendingAction = null;
+      if (pending.conversationId) state.activeConversationId = pending.conversationId;
+      openWorkspace({
+        prompt: pending.prompt,
+        imageUrl: pending.imageUrl,
+        imageData: pending.imageData,
+        openEditor: true,
+        sourceGenerationId: pending.sourceGenerationId || null
+      });
+      elements.editorPublicInput.checked = Boolean(pending.isPublic);
+    } else if (state.pendingAction?.type === "generate") {
+      const pending = state.pendingAction;
+      state.pendingAction = null;
+      if (pending.conversationId) state.activeConversationId = pending.conversationId;
+      openWorkspace({ prompt: pending.prompt });
+    } else if (state.draftPrompt) {
+      const prompt = state.draftPrompt;
+      state.draftPrompt = "";
+      openWorkspace({ prompt });
+    } else {
+      setView("landing");
+      window.scrollTo({ top: 0, behavior: "auto" });
+      restartHeroVideo();
+    }
   } catch (error) {
     showToast(error.message, "ri-error-warning-line");
   } finally {
@@ -1769,9 +1881,13 @@ async function logout() {
   await api("/api/auth/logout", { method: "POST" }).catch(() => null);
   state.user = null;
   state.history = [];
+  state.allGenerations = [];
+  state.activeConversationId = null;
+  state.pendingAction = null;
+  state.workspaceMode = "create";
   state.checkin = { checkedInToday: false, credit: state.settings?.checkinCredit || 1 };
-  state.forceHero = true;
   renderAll();
+  setView("landing");
   window.scrollTo({ top: 0, behavior: "auto" });
   restartHeroVideo();
 }
@@ -2130,26 +2246,30 @@ async function bootstrap() {
     await loadHistory();
     await loadStats();
     await loadPublicGallery();
+    await loadConversations();
   } catch (error) {
     showToast(error.message, "ri-error-warning-line");
   }
-  state.forceHero = true;
   renderAll();
   setupHeroVideo();
-  if (state.view === "home") {
+  if (state.view === "landing") {
     setTimeout(openComplianceNotice, 260);
   }
 }
 
 function bindGlobalEvents() {
   elements.brandBtn.addEventListener("click", () => {
-    state.forceHero = true;
-    setView("home");
+    setView("landing");
     window.scrollTo({ top: 0, behavior: "smooth" });
     restartHeroVideo();
   });
+  elements.startCreateBtn?.addEventListener("click", () => openWorkspace());
+  elements.workspaceNewBtn?.addEventListener("click", startNewConversation);
   elements.promptLibraryBtn.addEventListener("click", () => setView("library"));
-  elements.imageEditorBtn.addEventListener("click", () => openImageEditor());
+  elements.imageEditorBtn.addEventListener("click", () => {
+    resetEditorWorkspace();
+    openWorkspace({ openEditor: true });
+  });
   elements.openLibraryInlineBtn.addEventListener("click", () => setView("library"));
   elements.langBtn.addEventListener("click", () => {
     state.lang = state.lang === "zh" ? "en" : "zh";
@@ -2166,18 +2286,15 @@ function bindGlobalEvents() {
     state.promptVisible = 20;
     renderLibrary();
   });
-  $("[data-editor-home]", elements.editorView).addEventListener("click", () => setView("home"));
-  $("[data-editor-create]", elements.editorView).addEventListener("click", () => {
-    state.forceHero = true;
-    setView("home");
-  });
+  $("[data-editor-home]", elements.editorView)?.addEventListener("click", () => setWorkspaceMode("create"));
+  $("[data-editor-create]", elements.editorView)?.addEventListener("click", () => setWorkspaceMode("create"));
   $$("[data-editor-tool]", elements.editorView).forEach((button) => {
     button.addEventListener("click", () => {
       state.editor.tool = button.dataset.editorTool;
       renderEditor();
     });
   });
-  $("[data-editor-undo]", elements.editorView).addEventListener("click", undoEditorMark);
+  $("[data-editor-undo]", elements.editorView)?.addEventListener("click", undoEditorMark);
   $$("[data-editor-zoom]", elements.editorView).forEach((button) => {
     button.addEventListener("click", () => zoomEditor(button.dataset.editorZoom));
   });
@@ -2212,7 +2329,6 @@ const convSidebarClose = $("#convSidebarClose");
 const convNewBtn = $("#convNewBtn");
 
 let conversations = [];
-let activeConversationId = null;
 
 function openConvSidebar() {
   convSidebar.classList.add("open");
@@ -2226,135 +2342,132 @@ function closeConvSidebar() {
   convOverlay.classList.add("hidden");
 }
 
-convSidebarBtn?.addEventListener("click", openConvSidebar);
-convSidebarClose?.addEventListener("click", closeConvSidebar);
-convOverlay?.addEventListener("click", closeConvSidebar);
-
-convNewBtn?.addEventListener("click", () => {
-  activeConversationId = null;
+function startNewConversation() {
+  state.activeConversationId = null;
   state.history = [];
-  state.forceHero = true;
+  state.draftPrompt = "";
+  state.pendingAction = null;
+  state.workspaceMode = "create";
+  resetEditorWorkspace();
   renderAll();
   closeConvSidebar();
-});
-
-async function loadConversations() {
-  if (!state.user) { conversations = []; renderConvList(); return; }
-  try {
-    const data = await api("/api/conversations");
-    conversations = data.conversations || [];
-  } catch { conversations = []; }
-  renderConvList();
+  openWorkspace();
 }
 
-function renderConvList() {
-  if (!convList) return;
-  convList.innerHTML = conversations.length
-    ? conversations.map((c) => `
-        <button class="conv-list-item ${c.id === activeConversationId ? "active" : ""}" data-conv-id="${c.id}">
-          <i class="ri-chat-3-line" style="flex-shrink:0;opacity:0.5"></i>
-          <span class="conv-title">${escapeHtml(c.title || "新对话")}</span>
-          <span class="conv-del" data-del-conv="${c.id}" title="删除"><i class="ri-delete-bin-line"></i></span>
-        </button>
-      `).join("")
-    : `<div style="padding:20px;text-align:center;color:#64748b;font-size:13px">暂无对话记录</div>`;
+function conversationGroupLabel(date) {
+  const target = new Date(date || 0);
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startTarget = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+  const diffDays = Math.round((startToday - startTarget) / 86400000);
+  if (diffDays <= 0) return state.lang === "zh" ? "今天" : "Today";
+  if (diffDays === 1) return state.lang === "zh" ? "昨天" : "Yesterday";
+  if (diffDays < 7) return state.lang === "zh" ? "近 7 天" : "Last 7 days";
+  return state.lang === "zh" ? "更早" : "Earlier";
+}
 
-  $$("[data-conv-id]", convList).forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      if (e.target.closest("[data-del-conv]")) return;
+function groupedConversations() {
+  const groups = new Map();
+  for (const conversation of conversations) {
+    const label = conversationGroupLabel(conversation.updatedAt || conversation.createdAt);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(conversation);
+  }
+  return [...groups.entries()];
+}
+
+function bindConversationListEvents(root) {
+  $$("[data-conv-id]", root).forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      if (event.target.closest("[data-del-conv]")) return;
       switchToConversation(btn.dataset.convId);
     });
   });
-  $$("[data-del-conv]", convList).forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      if (!confirm("确认删除此对话？")) return;
+  $$("[data-del-conv]", root).forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (!confirm(state.lang === "zh" ? "确认删除此对话？" : "Delete this conversation?")) return;
       try {
         await api(`/api/conversations/${btn.dataset.delConv}`, { method: "DELETE" });
-        if (activeConversationId === btn.dataset.delConv) {
-          activeConversationId = null;
+        if (state.activeConversationId === btn.dataset.delConv) {
+          state.activeConversationId = null;
           state.history = [];
-          state.forceHero = true;
+          state.workspaceMode = "create";
           renderAll();
         }
         await loadConversations();
-      } catch (err) { showToast(err.message, "ri-error-warning-line"); }
+      } catch (error) {
+        showToast(error.message, "ri-error-warning-line");
+      }
     });
   });
 }
 
+function renderConversationList(root) {
+  if (!root) return;
+  const groups = groupedConversations();
+  root.innerHTML = groups.length
+    ? groups.map(([label, items]) => `
+        <section class="conv-group">
+          <h3 class="conv-group-title">${escapeHtml(label)}</h3>
+          <div class="conv-group-items">
+            ${items.map((conversation) => `
+              <button class="conv-list-item ${conversation.id === state.activeConversationId ? "active" : ""}" type="button" data-conv-id="${conversation.id}">
+                <i class="ri-chat-3-line"></i>
+                <span class="conv-title">${escapeHtml(conversation.title || (state.lang === "zh" ? "新对话" : "New chat"))}</span>
+                <span class="conv-del" data-del-conv="${conversation.id}" title="删除"><i class="ri-delete-bin-line"></i></span>
+              </button>
+            `).join("")}
+          </div>
+        </section>
+      `).join("")
+    : `<div class="conv-empty">${escapeHtml(state.lang === "zh" ? "暂无对话记录" : "No conversations yet")}</div>`;
+  bindConversationListEvents(root);
+}
+
+function renderConvList() {
+  renderConversationList(convList);
+  renderConversationList(elements.workspaceConvList);
+}
+
+async function loadConversations() {
+  if (!state.user) {
+    conversations = [];
+    renderConvList();
+    return;
+  }
+  try {
+    const data = await api("/api/conversations");
+    conversations = data.conversations || [];
+  } catch {
+    conversations = [];
+  }
+  renderConvList();
+}
+
 async function switchToConversation(convId) {
-  activeConversationId = convId;
+  const previousConversationId = state.activeConversationId;
+  const previousHistory = [...state.history];
   closeConvSidebar();
   try {
     const data = await api(`/api/conversations/${convId}`);
-    state.history = (data.messages || []).map((gen) => ({
-      id: gen.id,
-      prompt: gen.prompt,
-      images: [gen.imageUrl],
-      status: "done",
-      time: gen.createdAt,
-      model: gen.model,
-      isPublic: Boolean(gen.isPublic),
-      options: { size: gen.size, quality: gen.quality, background: gen.background, outputFormat: gen.outputFormat }
-    }));
-    state.forceHero = false;
+    state.activeConversationId = convId;
+    state.history = (data.messages || []).map(historyItemFromGeneration);
+    state.workspaceMode = "create";
     renderAll();
+    setView("workspace");
     scrollToBottom();
-  } catch (err) {
-    showToast(err.message, "ri-error-warning-line");
+    return true;
+  } catch (error) {
+    state.activeConversationId = previousConversationId;
+    state.history = previousHistory;
+    renderConvList();
+    showToast(error.message, "ri-error-warning-line");
+    return false;
   }
 }
 
-// Patch submitGeneration to include conversationId
-const _origSubmitGeneration = submitGeneration;
-// We need to intercept the API call in submitGeneration.
-// Since submitGeneration calls api("/api/images/generate", ...) with body,
-// the easiest way is to monkey-patch the generation payload.
-// Let's override via wrapping the fetch body construction.
-
-// Actually, let's just patch the JSON.stringify call by adding conversationId
-// to the body object before it's sent. We do this by wrapping the api function
-// specifically for the generate endpoint.
-
-const _originalApi = api;
-// No need - let's add conversationId to state and use it in submitGeneration.
-// The simplest approach: add a MutationObserver or patch the submit flow.
-
-// Simplest: override submitGeneration to inject conversationId
-// The original submitGeneration is defined with `async function submitGeneration(form)`
-// and calls api("/api/images/generate", { method: "POST", body: JSON.stringify({...}) })
-// 
-// We'll monkey-patch the global `api` to intercept generate calls:
-
-(function patchApiForConversations() {
-  const origFetch = window.fetch;
-  window.fetch = async function(url, options) {
-    if (typeof url === "string" && url === "/api/images/generate" && options?.body) {
-      try {
-        const body = JSON.parse(options.body);
-        if (activeConversationId && !body.conversationId) {
-          body.conversationId = activeConversationId;
-          options = { ...options, body: JSON.stringify(body) };
-        }
-      } catch {}
-    }
-    const response = await origFetch.call(this, url, options);
-
-    // After generate succeeds, capture conversationId from response
-    if (typeof url === "string" && url === "/api/images/generate" && response.ok) {
-      const cloned = response.clone();
-      try {
-        const data = await cloned.json();
-        if (data.conversationId && !activeConversationId) {
-          activeConversationId = data.conversationId;
-          // Reload conversations list in background
-          loadConversations();
-        }
-      } catch {}
-    }
-    return response;
-  };
-})();
-
-// Show/hide the conversation button based on login state - handled in updateNav above
+convSidebarBtn?.addEventListener("click", openConvSidebar);
+convSidebarClose?.addEventListener("click", closeConvSidebar);
+convOverlay?.addEventListener("click", closeConvSidebar);
+convNewBtn?.addEventListener("click", startNewConversation);

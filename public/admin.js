@@ -172,30 +172,13 @@ function renderPanel() {
 }
 
 
-// ===================== Unified Logs (merged 生图记录 + 调用日志) =====================
+// ===================== Upstream Logs =====================
 
 function renderUnifiedLogs() {
-  const records = state.records || [];
   const upstreamLogs = state.logs || [];
   const filter = state.logsFilter || { type: "", start_date: "", end_date: "" };
   const panel = $("#panel") || $("#upstreamPanel");
   if (!panel) return;
-
-  // Build combined timeline: generation records + upstream logs
-  const combined = [];
-  for (const r of records) {
-    combined.push({ kind: "generation", time: r.createdAt, data: r });
-  }
-  for (const l of upstreamLogs) {
-    // Only show upstream logs that are NOT already linked to a generation record
-    combined.push({ kind: "upstream", time: l.time, data: l });
-  }
-  // Sort by time descending
-  combined.sort((a, b) => {
-    const ta = new Date(a.time || 0).getTime();
-    const tb = new Date(b.time || 0).getTime();
-    return tb - ta;
-  });
 
   const selectedCount = state.logsSelected ? state.logsSelected.size : 0;
 
@@ -203,8 +186,8 @@ function renderUnifiedLogs() {
     <div class="card">
       <div class="upstream-header">
         <div>
-          <h2>生图日志</h2>
-          <p class="muted">合并展示本站生图记录和上游调用日志。可按日期筛选，点击「详情」展开上游 payload。</p>
+          <h2>上游调用日志</h2>
+          <p class="muted">仅展示上游 chatgpt2api 的调用日志。可按日期筛选，点击「详情」查看 payload，并支持删除所选日志。</p>
         </div>
         <div class="upstream-header-actions">
           <button class="secondary" type="button" id="logsRefreshBtn">刷新</button>
@@ -222,15 +205,14 @@ function renderUnifiedLogs() {
         <button class="secondary" type="button" id="logsResetBtn">重置</button>
       </form>
       <div class="table-wrap">
-        ${combined.length ? `
+        ${upstreamLogs.length ? `
           <table>
             <thead>
               <tr>
                 <th style="width:32px"><input type="checkbox" id="logsSelectAll"></th>
-                <th>图片</th>
-                <th>用户</th>
-                <th>提示词</th>
-                <th>上游</th>
+                <th>类型</th>
+                <th>摘要</th>
+                <th>模型</th>
                 <th>状态</th>
                 <th>耗时</th>
                 <th>时间</th>
@@ -238,10 +220,7 @@ function renderUnifiedLogs() {
               </tr>
             </thead>
             <tbody>
-              ${combined.map((item) => {
-                if (item.kind === "generation") return renderGenRow(item.data);
-                return renderUpstreamLogRow(item.data);
-              }).join("")}
+              ${upstreamLogs.map((item) => renderUpstreamLogRow(item)).join("")}
             </tbody>
           </table>
         ` : `<div class="empty">暂无记录</div>`}
@@ -294,23 +273,6 @@ function renderUnifiedLogs() {
       renderUnifiedLogs();
     });
   });
-}
-
-function renderGenRow(record) {
-  const id = record.id || record.firstGenerationId || "";
-  return `
-    <tr class="gen-row">
-      <td></td>
-      <td>${record.imageUrl ? `<a href="${escapeHtml(record.imageUrl)}" target="_blank"><img class="thumb" src="${escapeHtml(record.imageUrl)}" alt=""></a>` : `<div class="thumb"></div>`}</td>
-      <td><strong>${escapeHtml(record.userName || record.userEmail || "")}</strong></td>
-      <td class="prompt-cell">${escapeHtml(record.prompt)}${record.errorMessage ? `<br><span class="muted">${escapeHtml(record.errorMessage)}</span>` : ""}</td>
-      <td>${record.upstreamUsed ? `<span class="status">${escapeHtml(record.upstreamUsed)}</span>` : "-"}</td>
-      <td><span class="status ${record.status === "failed" ? "failed" : ""}">${escapeHtml(record.status)}</span></td>
-      <td></td>
-      <td>${fmt(record.createdAt)}</td>
-      <td></td>
-    </tr>
-  `;
 }
 
 function renderUpstreamLogRow(item) {
@@ -1026,22 +988,19 @@ function renderSettings() {
 
 async function loadPanel() {
   if (state.view === "logs") {
-    // Load both generation records AND upstream logs for unified view
-    const [genData, logsData] = await Promise.all([
-      api("/api/admin/generations?limit=200").catch(() => ({ records: [] })),
-      (async () => {
-        try {
-          const params = new URLSearchParams();
-          const filter = state.logsFilter || {};
-          if (filter.type) params.set("type", filter.type);
-          if (filter.start_date) params.set("start_date", filter.start_date);
-          if (filter.end_date) params.set("end_date", filter.end_date);
-          const query = params.toString();
-          return await api(`/api/admin/upstream/logs${query ? `?${query}` : ""}`);
-        } catch { return { items: [] }; }
-      })()
-    ]);
-    state.records = genData.records || [];
+    const logsData = await (async () => {
+      try {
+        const params = new URLSearchParams();
+        const filter = state.logsFilter || {};
+        if (filter.type) params.set("type", filter.type);
+        if (filter.start_date) params.set("start_date", filter.start_date);
+        if (filter.end_date) params.set("end_date", filter.end_date);
+        const query = params.toString();
+        return await api(`/api/admin/upstream/logs${query ? `?${query}` : ""}`);
+      } catch {
+        return { items: [] };
+      }
+    })();
     state.logs = Array.isArray(logsData.items) ? logsData.items : [];
   } else if (state.view === "users") {
     const data = await api("/api/admin/users");
