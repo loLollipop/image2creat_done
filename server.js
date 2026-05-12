@@ -1635,6 +1635,7 @@ async function serveStatic(req, res, url) {
   const pathname = decodeURIComponent(url.pathname);
   const requestedPath = pathname === "/" ? "/index.html" : pathname === "/admin" ? "/admin.html" : pathname;
   const absolutePath = path.normalize(path.join(PUBLIC_DIR, requestedPath));
+  const isAssetRequest = path.extname(pathname) !== "";
   if (absolutePath !== PUBLIC_DIR && !absolutePath.startsWith(PUBLIC_DIR + path.sep)) {
     return sendError(res, 403, "Forbidden");
   }
@@ -1644,12 +1645,20 @@ async function serveStatic(req, res, url) {
     if (!stat.isFile()) throw new Error("not a file");
     const extension = path.extname(absolutePath).toLowerCase();
     const bytes = await fs.readFile(absolutePath);
+    const cacheControl = extension === ".html"
+      ? "no-store"
+      : extension === ".css" || extension === ".js"
+        ? "no-cache"
+        : "public, max-age=3600";
     res.writeHead(200, {
       "Content-Type": mimeTypes.get(extension) || "application/octet-stream",
-      "Cache-Control": extension === ".html" ? "no-store" : "public, max-age=3600"
+      "Cache-Control": cacheControl
     });
     res.end(bytes);
   } catch {
+    if (isAssetRequest) {
+      return sendError(res, 404, "Static asset not found");
+    }
     const html = await fs.readFile(path.join(PUBLIC_DIR, "index.html"), "utf8");
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
