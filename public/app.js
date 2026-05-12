@@ -1806,6 +1806,16 @@ function openCreditsModal() {
           <button class="modal-primary" type="submit">${text("redeemSubmit")}</button>
         </div>
       </form>
+      <div class="topup-channels">
+        <h3>充值渠道</h3>
+        <a class="topup-link" href="https://pay.ldxp.cn/shop/GGbond" target="_blank" rel="noopener">
+          <i class="ri-store-2-line"></i> 去链动小铺购买卡密
+        </a>
+        <a class="topup-link" href="#" onclick="navigator.clipboard.writeText('Jerrylove_Bom');this.querySelector('.topup-hint').textContent='已复制微信号';return false;">
+          <i class="ri-wechat-line"></i> 联系客服充值（微信：Jerrylove_Bom）
+          <span class="topup-hint"></span>
+        </a>
+      </div>
       <button class="modal-secondary" type="button" data-history>${text("historyLink")}</button>
       <button class="modal-secondary" type="button" data-close-auth>${text("close")}</button>
     </section>

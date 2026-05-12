@@ -439,3 +439,49 @@ td code {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* ===== Sub-tabs (upstream management) ===== */
+.sub-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: var(--soft);
+  border-radius: 12px;
+  border: 1px solid var(--line);
+}
+
+.sub-tabs button.active {
+  background: var(--dark);
+  color: #fff;
+  border-color: var(--dark);
+}
+
+/* Upstream log rows in unified table */
+.upstream-log-row td {
+  opacity: 0.75;
+  font-size: 13px;
+}
+
+.gen-row td {
+  border-left: 3px solid transparent;
+}
+
+/* Advanced toggle in settings */
+.advanced-toggle {
+  border: none;
+  margin-top: 12px;
+}
+
+.advanced-toggle summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.advanced-toggle summary:hover {
+  color: var(--ink);
+}
