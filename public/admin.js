@@ -18,8 +18,18 @@ const state = {
   logsExpanded: new Set(),
   logsSelected: new Set(),
   logsHighlightPrompt: "",
+  register: null,
+  registerLogsCollapsed: false,
+  upstreamSettings: null,
+  upstreamSettingsDraft: "",
+  upstreamSettingsDraftDirty: false,
+  upstreamSettingsStorage: null,
+  backups: null,
+  backupsExpanded: new Set(),
   lastBatch: null
 };
+
+let registerPollTimer = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -114,13 +124,16 @@ function renderAdmin() {
       <button class="secondary ${state.view === "payments" ? "active" : ""}" data-view="payments">支付订单</button>
       <button class="secondary ${state.view === "accounts" ? "active" : ""}" data-view="accounts">号池</button>
       <button class="secondary ${state.view === "logs" ? "active" : ""}" data-view="logs">调用日志</button>
-      <button class="secondary ${state.view === "upstream" ? "active" : ""}" data-view="upstream">上游管理（旧）</button>
+      <button class="secondary ${state.view === "register" ? "active" : ""}" data-view="register">注册机</button>
+      <button class="secondary ${state.view === "upstreamSettings" ? "active" : ""}" data-view="upstreamSettings">上游设置</button>
+      <button class="secondary ${state.view === "backups" ? "active" : ""}" data-view="backups">备份</button>
       <button class="secondary ${state.view === "settings" ? "active" : ""}" data-view="settings">接口设置</button>
     </div>
     <section id="panel"></section>
   `;
   $$("[data-view]").forEach((button) => {
     button.addEventListener("click", async () => {
+      stopRegisterPolling();
       state.view = button.dataset.view;
       await loadPanel();
       renderAdmin();
@@ -128,6 +141,33 @@ function renderAdmin() {
     });
   });
   renderPanel();
+}
+
+function stopRegisterPolling() {
+  if (registerPollTimer) {
+    clearInterval(registerPollTimer);
+    registerPollTimer = null;
+  }
+}
+
+function startRegisterPolling() {
+  stopRegisterPolling();
+  // 2s aligns with chatgpt2api's own SSE cadence (0.5s) without hammering the
+  // admin proxy. Polling stops on every tab switch via stopRegisterPolling().
+  registerPollTimer = setInterval(async () => {
+    if (state.view !== "register") {
+      stopRegisterPolling();
+      return;
+    }
+    try {
+      const data = await api("/api/admin/upstream/register");
+      state.register = data.register || null;
+      renderRegister({ preserveFocus: true });
+    } catch (error) {
+      // Silent — toast spam is worse than briefly stale stats.
+      console.warn("register poll failed:", error.message);
+    }
+  }, 2000);
 }
 
 function renderPanel() {
@@ -138,36 +178,10 @@ function renderPanel() {
   if (state.view === "payments") return renderPayments();
   if (state.view === "accounts") return renderAccounts();
   if (state.view === "logs") return renderLogs();
-  if (state.view === "upstream") return renderUpstream();
+  if (state.view === "register") return renderRegister();
+  if (state.view === "upstreamSettings") return renderUpstreamSettings();
+  if (state.view === "backups") return renderBackups();
   renderSettings();
-}
-
-function renderUpstream() {
-  $("#panel").innerHTML = `
-    <div class="card upstream-card">
-      <div class="upstream-header">
-        <div>
-          <h2>上游管理（旧 iframe）</h2>
-          <p class="muted">
-            注意：号池已经原生集成到「号池」标签，调用日志已经原生集成到「调用日志」标签，无需再进 iframe。
-            这里保留是为了访问 chatgpt2api 还没原生化的功能（注册机 / 系统设置 / 备份）。
-            下一个 PR 会把这些也搬过来，最后会移除本页。
-          </p>
-        </div>
-        <div class="upstream-header-actions">
-          <a class="secondary" href="/upstream/" target="_blank" rel="noopener">在新标签页打开</a>
-        </div>
-      </div>
-      <div class="upstream-frame-wrap">
-        <iframe
-          class="upstream-frame"
-          src="/upstream/"
-          title="chatgpt2api admin"
-          referrerpolicy="same-origin"
-        ></iframe>
-      </div>
-    </div>
-  `;
 }
 
 // chatgpt2api stores account.status as one of these four Chinese strings:
@@ -601,6 +615,427 @@ async function deleteSelectedLogs() {
     state.logsExpanded = new Set();
     await loadPanel();
     renderLogs();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+// ---------- 注册机 ----------
+const REGISTER_MODE_LABELS = {
+  total: "按总数",
+  quota: "按累计配额",
+  available: "按可用配额"
+};
+
+function renderRegister({ preserveFocus = false } = {}) {
+  const reg = state.register || {};
+  const stats = reg.stats || {};
+  const mail = reg.mail || {};
+  const mailJson = mail && typeof mail === "object" ? JSON.stringify(mail, null, 2) : "";
+  const logs = Array.isArray(reg.logs) ? reg.logs : [];
+  const enabled = Boolean(reg.enabled);
+  // Preserve mail textarea focus across the 2s polling rerender — without this
+  // the user can't edit mail JSON because every poll wipes their selection.
+  const mailFocused = preserveFocus && document.activeElement && document.activeElement.id === "regMail";
+  const mailSelStart = mailFocused ? document.activeElement.selectionStart : null;
+  const mailSelEnd = mailFocused ? document.activeElement.selectionEnd : null;
+
+  $("#panel").innerHTML = `
+    <div class="card">
+      <div class="upstream-header">
+        <div>
+          <h2>注册机（chatgpt2api）</h2>
+          <p class="muted">驱动 chatgpt2api 内置的 ChatGPT 注册流程：按总数 / 累计配额 / 可用配额三种模式拉号，统计 + 日志通过本页面每 2 秒轮询展示。修改邮件提供商 / 代理 / 总数 / 线程数 / 模式后请点「保存配置」。</p>
+        </div>
+        <div class="upstream-header-actions">
+          <span class="status ${enabled ? "warn" : ""}">${enabled ? "运行中" : "已停止"}</span>
+        </div>
+      </div>
+      <form id="regForm" class="form" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:flex-end">
+        <label>模式
+          <select id="regMode">
+            ${Object.entries(REGISTER_MODE_LABELS).map(([value, label]) => `<option value="${escapeHtml(value)}" ${reg.mode === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+          </select>
+        </label>
+        <label>总数
+          <input id="regTotal" type="number" min="1" value="${Number(reg.total || 10)}">
+        </label>
+        <label>目标累计配额
+          <input id="regTargetQuota" type="number" min="1" value="${Number(reg.target_quota || 100)}">
+        </label>
+        <label>目标可用号
+          <input id="regTargetAvailable" type="number" min="1" value="${Number(reg.target_available || 10)}">
+        </label>
+        <label>线程数
+          <input id="regThreads" type="number" min="1" max="20" value="${Number(reg.threads || 3)}">
+        </label>
+        <label>检查间隔（秒）
+          <input id="regCheckInterval" type="number" min="1" value="${Number(reg.check_interval || 5)}">
+        </label>
+        <label style="grid-column:1 / -1">代理（http://user:pass@host:port，留空走直连）
+          <input id="regProxy" value="${escapeHtml(String(reg.proxy || ""))}">
+        </label>
+        <label style="grid-column:1 / -1">邮件提供商 JSON
+          <textarea id="regMail" rows="6" style="font-family:monospace;font-size:12px">${escapeHtml(mailJson)}</textarea>
+        </label>
+        <div style="grid-column:1 / -1;display:flex;gap:10px;flex-wrap:wrap">
+          <button class="primary" type="submit">保存配置</button>
+          <button class="secondary" type="button" id="regStart" ${enabled ? "disabled" : ""}>启动</button>
+          <button class="secondary" type="button" id="regStop" ${enabled ? "" : "disabled"}>停止</button>
+          <button class="secondary" type="button" id="regReset">重置统计</button>
+          <button class="secondary" type="button" id="regRefresh">手动刷新</button>
+        </div>
+      </form>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:14px">
+        <div class="card" style="padding:10px"><div class="muted">完成 / 计划</div><div style="font-size:18px;font-weight:600">${Number(stats.done || 0)} / ${Number(reg.total || 0)}</div></div>
+        <div class="card" style="padding:10px"><div class="muted">成功 / 失败</div><div style="font-size:18px;font-weight:600">${Number(stats.success || 0)} / ${Number(stats.fail || 0)}</div></div>
+        <div class="card" style="padding:10px"><div class="muted">运行中</div><div style="font-size:18px;font-weight:600">${Number(stats.running || 0)}</div></div>
+        <div class="card" style="padding:10px"><div class="muted">线程</div><div style="font-size:18px;font-weight:600">${Number(stats.threads || reg.threads || 0)}</div></div>
+        <div class="card" style="padding:10px"><div class="muted">当前累计配额</div><div style="font-size:18px;font-weight:600">${Number(stats.current_quota || 0)}</div></div>
+        <div class="card" style="padding:10px"><div class="muted">当前可用号</div><div style="font-size:18px;font-weight:600">${Number(stats.current_available || 0)}</div></div>
+        <div class="card" style="padding:10px"><div class="muted">平均耗时（秒）</div><div style="font-size:18px;font-weight:600">${Number(stats.avg_seconds || 0).toFixed(1)}</div></div>
+        <div class="card" style="padding:10px"><div class="muted">成功率</div><div style="font-size:18px;font-weight:600">${(Number(stats.success_rate || 0) * 100).toFixed(1)}%</div></div>
+      </div>
+      <div style="margin-top:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <strong>注册日志</strong>
+          <span class="muted">最近 ${logs.length} 条（chatgpt2api 服务端只保留最近 300 条）</span>
+        </div>
+        <div class="table-wrap" style="max-height:320px">
+          ${logs.length ? `
+            <table>
+              <thead>
+                <tr><th style="width:160px">时间</th><th>消息</th></tr>
+              </thead>
+              <tbody>
+                ${logs.slice().reverse().map((entry) => `
+                  <tr>
+                    <td>${escapeHtml(String(entry.ts || entry.time || ""))}</td>
+                    <td style="color:${escapeHtml(entry.color === "red" ? "#b42318" : entry.color === "yellow" ? "#b45309" : "#0f172a")}">${escapeHtml(String(entry.text || ""))}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          ` : `<div class="empty">${enabled ? "运行中，等待第一条日志…" : "暂无日志，点击「启动」开始"}</div>`}
+        </div>
+      </div>
+    </div>
+  `;
+  if (mailFocused) {
+    const ta = $("#regMail");
+    if (ta) {
+      ta.focus();
+      if (mailSelStart != null) ta.setSelectionRange(mailSelStart, mailSelEnd);
+    }
+  }
+  $("#regForm").addEventListener("submit", saveRegisterConfig);
+  $("#regStart").addEventListener("click", () => registerLifecycle("start"));
+  $("#regStop").addEventListener("click", () => registerLifecycle("stop"));
+  $("#regReset").addEventListener("click", () => registerLifecycle("reset"));
+  $("#regRefresh").addEventListener("click", async () => {
+    await loadPanel();
+    renderRegister();
+  });
+}
+
+async function saveRegisterConfig(event) {
+  event.preventDefault();
+  let mailJson;
+  try {
+    const raw = $("#regMail").value.trim();
+    mailJson = raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    toast(`邮件 JSON 解析失败：${error.message}`);
+    return;
+  }
+  const payload = {
+    mode: $("#regMode").value,
+    total: Number($("#regTotal").value || 0),
+    threads: Number($("#regThreads").value || 0),
+    target_quota: Number($("#regTargetQuota").value || 0),
+    target_available: Number($("#regTargetAvailable").value || 0),
+    check_interval: Number($("#regCheckInterval").value || 0),
+    proxy: $("#regProxy").value.trim(),
+    mail: mailJson
+  };
+  try {
+    const data = await api("/api/admin/upstream/register", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.register = data.register || null;
+    toast("注册机配置已保存");
+    renderRegister();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function registerLifecycle(action) {
+  if (action === "reset" && !window.confirm("确认重置注册机统计与日志？")) return;
+  try {
+    const data = await api(`/api/admin/upstream/register/${action}`, { method: "POST" });
+    state.register = data.register || null;
+    toast({ start: "注册任务已启动", stop: "已请求停止", reset: "统计已重置" }[action] || "操作成功");
+    if (action === "start") startRegisterPolling();
+    if (action === "stop") stopRegisterPolling();
+    renderRegister();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+// ---------- 上游系统设置 ----------
+function renderUpstreamSettings() {
+  const draft = state.upstreamSettingsDraft || "";
+  const storage = state.upstreamSettingsStorage || {};
+  const backend = storage.backend || {};
+  const health = storage.health || {};
+  const proxy = state.upstreamSettings && typeof state.upstreamSettings.proxy === "string" ? state.upstreamSettings.proxy : "";
+
+  $("#panel").innerHTML = `
+    <div class="card">
+      <div class="upstream-header">
+        <div>
+          <h2>上游系统设置（chatgpt2api）</h2>
+          <p class="muted">直接编辑 chatgpt2api 的全局 <code>config.json</code>。常用字段：<code>proxy</code>（出口代理）、<code>refresh_account_interval_minute</code>（号池刷新间隔）、<code>image_retention_days</code>（生成图保留天数）、<code>auto_remove_invalid_accounts</code>、<code>auto_remove_rate_limited_accounts</code>、<code>sensitive_words</code>、<code>ai_review</code>、<code>backup</code>、<code>storage</code> 等。保存后即时生效。</p>
+        </div>
+        <div class="upstream-header-actions">
+          <button class="secondary" type="button" id="upSettingsReload">重新加载</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 280px;gap:14px;align-items:flex-start">
+        <div>
+          <label style="display:flex;flex-direction:column;gap:4px">
+            <span>config.json (JSON, 可编辑)</span>
+            <textarea id="upSettingsTextarea" rows="24" style="font-family:monospace;font-size:12px;width:100%;min-height:360px">${escapeHtml(draft)}</textarea>
+          </label>
+          <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
+            <button class="primary" type="button" id="upSettingsSave">保存</button>
+            <button class="secondary" type="button" id="upSettingsFormat">格式化</button>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div class="card" style="padding:10px">
+            <strong>代理测试</strong>
+            <label style="margin-top:6px">URL（留空就用 config 里 <code>proxy</code> = <code>${escapeHtml(proxy || "（空）")}</code>）
+              <input id="proxyTestUrl" placeholder="${escapeHtml(proxy || "http://user:pass@host:port")}">
+            </label>
+            <button class="secondary" type="button" id="proxyTestBtn" style="margin-top:6px">测试代理</button>
+            <pre id="proxyTestResult" class="muted" style="margin-top:6px;font-size:12px;background:#f8fafc;padding:8px;border-radius:6px;white-space:pre-wrap;min-height:40px"></pre>
+          </div>
+          <div class="card" style="padding:10px">
+            <strong>存储后端</strong>
+            <p class="muted" style="margin:6px 0">后端 <code>${escapeHtml(String(backend.kind || backend.type || backend.name || "json"))}</code>，状态 ${escapeHtml(String(health.status || "unknown"))}${health.message ? `：${escapeHtml(String(health.message))}` : ""}</p>
+            <pre style="font-size:11px;background:#f8fafc;padding:8px;border-radius:6px;white-space:pre-wrap;max-height:200px;overflow:auto">${escapeHtml(JSON.stringify({ backend, health }, null, 2))}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  $("#upSettingsReload").addEventListener("click", async () => { await loadPanel(); renderUpstreamSettings(); });
+  $("#upSettingsTextarea").addEventListener("input", (event) => {
+    state.upstreamSettingsDraft = event.target.value;
+    state.upstreamSettingsDraftDirty = true;
+  });
+  $("#upSettingsFormat").addEventListener("click", () => {
+    try {
+      const parsed = JSON.parse(state.upstreamSettingsDraft || "{}");
+      state.upstreamSettingsDraft = JSON.stringify(parsed, null, 2);
+      renderUpstreamSettings();
+    } catch (error) {
+      toast(`JSON 格式错误：${error.message}`);
+    }
+  });
+  $("#upSettingsSave").addEventListener("click", saveUpstreamSettings);
+  $("#proxyTestBtn").addEventListener("click", runProxyTest);
+}
+
+async function saveUpstreamSettings() {
+  let parsed;
+  try {
+    parsed = JSON.parse(state.upstreamSettingsDraft || "{}");
+  } catch (error) {
+    toast(`JSON 格式错误：${error.message}`);
+    return;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    toast("配置必须是 JSON 对象");
+    return;
+  }
+  try {
+    const data = await api("/api/admin/upstream/settings", {
+      method: "POST",
+      body: JSON.stringify(parsed)
+    });
+    state.upstreamSettings = data && data.config ? data.config : parsed;
+    state.upstreamSettingsDraft = JSON.stringify(state.upstreamSettings, null, 2);
+    state.upstreamSettingsDraftDirty = false;
+    toast("上游设置已保存");
+    renderUpstreamSettings();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function runProxyTest() {
+  const url = $("#proxyTestUrl").value.trim();
+  const out = $("#proxyTestResult");
+  out.textContent = "测试中…";
+  try {
+    const data = await api("/api/admin/upstream/proxy/test", {
+      method: "POST",
+      body: JSON.stringify({ url })
+    });
+    out.textContent = JSON.stringify(data && data.result ? data.result : data, null, 2);
+  } catch (error) {
+    out.textContent = `失败：${error.message}`;
+  }
+}
+
+// ---------- 备份 ----------
+function fmtBytes(n) {
+  const value = Number(n || 0);
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = value;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function renderBackups() {
+  const data = state.backups || {};
+  const items = Array.isArray(data.items) ? data.items : [];
+  const stateObj = data.state || {};
+  const settings = data.settings || {};
+  const running = Boolean(stateObj.running);
+
+  $("#panel").innerHTML = `
+    <div class="card">
+      <div class="upstream-header">
+        <div>
+          <h2>备份（chatgpt2api）</h2>
+          <p class="muted">使用 chatgpt2api 内置的备份服务。备份内容默认包括 <code>data/</code> 下的账号、注册任务、日志、生成图。备份类型与目标在「上游系统设置」的 <code>backup</code> 字段配置（local / s3 / webdav 等）。</p>
+        </div>
+        <div class="upstream-header-actions">
+          <button class="secondary" type="button" id="backupsReload">刷新</button>
+          <button class="secondary" type="button" id="backupsTest">测试连接</button>
+          <button class="primary" type="button" id="backupsRun" ${running ? "disabled" : ""}>立即备份${running ? "（运行中）" : ""}</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px">
+        <div class="card" style="padding:10px"><div class="muted">类型</div><div style="font-weight:600">${escapeHtml(String(settings.type || settings.backend || "-"))}</div></div>
+        <div class="card" style="padding:10px"><div class="muted">状态</div><div style="font-weight:600">${escapeHtml(running ? "正在备份…" : (stateObj.last_status || "idle"))}</div></div>
+        <div class="card" style="padding:10px"><div class="muted">上次开始</div><div style="font-weight:600">${escapeHtml(String(stateObj.last_started_at || "-"))}</div></div>
+        <div class="card" style="padding:10px"><div class="muted">上次完成</div><div style="font-weight:600">${escapeHtml(String(stateObj.last_finished_at || "-"))}</div></div>
+        ${stateObj.last_error ? `<div class="card" style="padding:10px;grid-column:1/-1"><div class="muted">最近错误</div><div style="color:#b42318;font-size:12px;white-space:pre-wrap">${escapeHtml(String(stateObj.last_error))}</div></div>` : ""}
+      </div>
+      <pre id="backupsTestResult" class="muted" style="font-size:12px;background:#f8fafc;padding:8px;border-radius:6px;white-space:pre-wrap;min-height:0;margin-bottom:14px"></pre>
+      <div class="table-wrap">
+        ${items.length ? `
+          <table>
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>时间</th>
+                <th>大小</th>
+                <th>触发</th>
+                <th>状态</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${items.map((item) => {
+                const key = String(item.key || item.id || "");
+                const expanded = state.backupsExpanded.has(key);
+                return `
+                  <tr data-backup-key="${escapeHtml(key)}">
+                    <td>${escapeHtml(String(item.name || item.key || "-"))}</td>
+                    <td>${escapeHtml(String(item.created_at || item.time || "-"))}</td>
+                    <td>${escapeHtml(fmtBytes(item.size))}</td>
+                    <td>${escapeHtml(String(item.trigger || "-"))}</td>
+                    <td>${item.status ? `<span class="status ${item.status === "failed" ? "failed" : ""}">${escapeHtml(String(item.status))}</span>` : "-"}</td>
+                    <td>
+                      <button class="tiny" type="button" data-action="detail">${expanded ? "收起" : "详情"}</button>
+                      <a class="tiny" href="/api/admin/upstream/backups/download?key=${encodeURIComponent(key)}" target="_blank" rel="noopener" style="margin-left:6px">下载</a>
+                      <button class="tiny" type="button" data-action="delete" style="margin-left:6px">删除</button>
+                    </td>
+                  </tr>
+                  ${expanded && item.__detail ? `<tr><td></td><td colspan="5"><pre style="font-size:12px;background:#f8fafc;padding:8px;border-radius:6px;white-space:pre-wrap;max-height:300px;overflow:auto">${escapeHtml(JSON.stringify(item.__detail, null, 2))}</pre></td></tr>` : ""}
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        ` : `<div class="empty">还没有备份。点击「立即备份」生成第一个。</div>`}
+      </div>
+    </div>
+  `;
+  $("#backupsReload").addEventListener("click", async () => { await loadPanel(); renderBackups(); });
+  $("#backupsTest").addEventListener("click", testBackupConnection);
+  $("#backupsRun").addEventListener("click", runBackupNow);
+  $$("tr[data-backup-key]").forEach((row) => {
+    const key = row.dataset.backupKey;
+    $("button[data-action='detail']", row)?.addEventListener("click", () => toggleBackupDetail(key));
+    $("button[data-action='delete']", row)?.addEventListener("click", () => deleteBackupItem(key));
+  });
+}
+
+async function testBackupConnection() {
+  const out = $("#backupsTestResult");
+  if (out) out.textContent = "测试中…";
+  try {
+    const data = await api("/api/admin/upstream/backups/test", { method: "POST" });
+    if (out) out.textContent = JSON.stringify(data && data.result ? data.result : data, null, 2);
+  } catch (error) {
+    if (out) out.textContent = `失败：${error.message}`;
+  }
+}
+
+async function runBackupNow() {
+  try {
+    await api("/api/admin/upstream/backups/run", { method: "POST" });
+    toast("备份任务已触发");
+    await loadPanel();
+    renderBackups();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function deleteBackupItem(key) {
+  if (!key) return;
+  if (!window.confirm(`确认删除备份 ${key}？此操作不可撤销。`)) return;
+  try {
+    await api("/api/admin/upstream/backups/delete", {
+      method: "POST",
+      body: JSON.stringify({ key })
+    });
+    toast("备份已删除");
+    state.backupsExpanded.delete(key);
+    await loadPanel();
+    renderBackups();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function toggleBackupDetail(key) {
+  if (!key || !state.backups || !Array.isArray(state.backups.items)) return;
+  const item = state.backups.items.find((x) => String(x.key || x.id || "") === key);
+  if (!item) return;
+  if (state.backupsExpanded.has(key)) {
+    state.backupsExpanded.delete(key);
+    renderBackups();
+    return;
+  }
+  try {
+    if (!item.__detail) {
+      const data = await api(`/api/admin/upstream/backups/detail?key=${encodeURIComponent(key)}`);
+      item.__detail = data && data.item ? data.item : data;
+    }
+    state.backupsExpanded.add(key);
+    renderBackups();
   } catch (error) {
     toast(error.message);
   }
@@ -1053,8 +1488,40 @@ async function loadPanel() {
       state.logs = [];
       toast(error.message);
     }
-  } else if (state.view === "upstream") {
-    // No backend prefetch needed — the iframe renders chatgpt2api directly.
+  } else if (state.view === "register") {
+    try {
+      const data = await api("/api/admin/upstream/register");
+      state.register = data.register || null;
+      startRegisterPolling();
+    } catch (error) {
+      state.register = null;
+      toast(error.message);
+    }
+  } else if (state.view === "upstreamSettings") {
+    try {
+      const data = await api("/api/admin/upstream/settings");
+      state.upstreamSettings = (data && data.config) || null;
+      state.upstreamSettingsDraft = JSON.stringify(state.upstreamSettings || {}, null, 2);
+      state.upstreamSettingsDraftDirty = false;
+    } catch (error) {
+      state.upstreamSettings = null;
+      state.upstreamSettingsDraft = "";
+      state.upstreamSettingsDraftDirty = false;
+      toast(error.message);
+    }
+    try {
+      const storage = await api("/api/admin/upstream/storage");
+      state.upstreamSettingsStorage = storage || null;
+    } catch (error) {
+      state.upstreamSettingsStorage = null;
+    }
+  } else if (state.view === "backups") {
+    try {
+      state.backups = await api("/api/admin/upstream/backups");
+    } catch (error) {
+      state.backups = null;
+      toast(error.message);
+    }
   } else {
     state.settings = await api("/api/admin/settings");
   }

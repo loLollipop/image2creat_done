@@ -1,6 +1,6 @@
 ---
 name: testing-stack
-description: Test the gpt-image-studio + chatgpt2api docker-compose stack end-to-end. Use when verifying the unified admin / single-port reverse-proxy flow, the credit / redeem-code system, or any change that touches `vendor/chatgpt2api/` mounted under `/upstream/*`.
+description: Test the gpt-image-studio + chatgpt2api docker-compose stack end-to-end. Use when verifying the native admin tabs (号池 / 调用日志 / 注册机 / 上游设置 / 备份) that talk to `vendor/chatgpt2api/` over the docker network, the credit / redeem-code system, or any change that touches `src/upstream-api-client.js` / `/api/admin/upstream/*`.
 ---
 
 # Testing the unified gpt-image-studio stack
@@ -11,7 +11,7 @@ This project ships a `docker-compose.yml` that brings up three services:
 - `gpt-image-chatgpt2api` (FastAPI + Next.js static export) — bound to `127.0.0.1:8080` only, intentionally not externally reachable.
 - `gpt-image-app` (Node) — the only externally-exposed port (`0.0.0.0:3000`).
 
-The app reverse-proxies `/upstream/*` to `chatgpt2api:80` over the docker network, gated by an admin session check (must be `role="admin"` AND `status="active"`). `/v1/*` stays at the root of `chatgpt2api:80` and is called by the app directly without path rewriting.
+The app exposes 号池 / 调用日志 / 注册机 / 上游设置 / 备份 as native admin tabs. Each tab calls `/api/admin/upstream/...` on the app, which forwards (with `Authorization: Bearer ${CHATGPT2API_AUTH_KEY}`) to `http://chatgpt2api:80/upstream/api/...` over the docker network. There is no more `/upstream/*` reverse proxy and no iframe. `/v1/*` still stays at the root of `chatgpt2api:80` and is called by the app directly without path rewriting.
 
 ## Bringing up the stack
 
@@ -38,18 +38,18 @@ The admin user is auto-bootstrapped on first start using `ADMIN_EMAIL` / `ADMIN_
 
 ## Smoke-test routes via curl
 
-All observed status codes for the unified-admin flow:
+All observed status codes for the native-admin flow:
 
 | Request | Expected |
 |---|---|
 | `GET /` | 200 (frontend) |
 | `GET /admin` | 200 (login form if anonymous, dashboard otherwise) |
-| `GET /upstream/` (anonymous, `Accept: text/html`) | 302 → `/admin?upstreamAuth=required` |
-| `GET /upstream/api/...` (anonymous, `Accept: application/json`) | 403 |
-| `GET /upstream/_next/...` (anonymous) | 403 (assets are gated too) |
-| `GET /upstream` (admin, no trailing slash) | 308 → `/upstream/` |
-| `GET /upstream/` (admin) | 200 (chatgpt2api Next.js index, with `/upstream/_next/...` URLs in HTML) |
-| `GET /upstream/login/` (admin) | 200 (chatgpt2api login) |
+| `GET /upstream/` | 404 (reverse proxy was removed in PR #12) |
+| `GET /api/admin/upstream/accounts` (anonymous) | 401 |
+| `GET /api/admin/upstream/logs` (anonymous) | 401 |
+| `GET /api/admin/upstream/register` (anonymous) | 401 |
+| `GET /api/admin/upstream/settings` (anonymous) | 401 |
+| `GET /api/admin/upstream/backups` (anonymous) | 401 |
 
 Login to grab a session cookie:
 
@@ -60,10 +60,13 @@ curl -c /tmp/admin-cookies.txt \
   http://localhost:3000/api/auth/login
 ```
 
-Then reuse it:
+Then reuse it (each tab hits a different `/api/admin/upstream/*` endpoint):
 
 ```bash
-curl -b /tmp/admin-cookies.txt http://localhost:3000/upstream/
+curl -b /tmp/admin-cookies.txt http://localhost:3000/api/admin/upstream/accounts
+curl -b /tmp/admin-cookies.txt http://localhost:3000/api/admin/upstream/register
+curl -b /tmp/admin-cookies.txt http://localhost:3000/api/admin/upstream/settings
+curl -b /tmp/admin-cookies.txt http://localhost:3000/api/admin/upstream/backups
 ```
 
 From inside the app container, the upstream `/v1/*` is reachable at the root (no path rewriting):
@@ -86,11 +89,13 @@ Then primary flow:
 
 1. Visit `http://localhost:3000/`, dismiss the 内容合规管理公告 modal, click 登录, enter admin credentials.
 2. Click 后台 in the header.
-3. Verify 7 tabs: 生图记录 / 用户管理 / 卡密管理 / 积分流水 / 支付订单 / **上游管理** / 接口设置.
-4. Click 上游管理 — iframe should render the chatgpt2api `欢迎回来` login.
-5. Type `chatgpt2api` (or whatever `CHATGPT2API_AUTH_KEY` is set to) into the password field, click 登录. The iframe transitions to 号池管理.
-6. Click 日志管理 inside the iframe — status bar should show `localhost:3000/upstream/logs/`. Confirms basePath baked into Next.js export and axios baseURL.
-7. Logout from our admin (top-right 退出), navigate to `http://localhost:3000/upstream/` directly. Should redirect to `/admin?upstreamAuth=required` with no upstream content leaked.
+3. Verify 10 tabs: 生图记录 / 用户管理 / 卡密管理 / 积分流水 / 支付订单 / **号池** / **调用日志** / **注册机** / **上游设置** / **备份** / 接口设置.
+4. Click 号池 — native page renders with an empty list. Add one `access_token` via the form; should appear in the table.
+5. Click 调用日志 — native page shows chatgpt2api's call log with filter / pagination / delete.
+6. Click 注册机 — form with mode / total / threads / mail JSON + 启动 / 停止 / 重置 buttons. 启动 makes the status badge flip to 运行中 and stats update every ≤2s. 停止 returns to 已停止.
+7. Click 上游设置 — JSON editor shows chatgpt2api's `config.json`. Edit → 保存 round-trips. Try 测试代理 with a blank URL → should return JSON result.
+8. Click 备份 — table of existing backups (initially empty). Click 立即备份 → watch 状态 flip to 正在备份 then to a new row.
+9. Sanity: navigate to `http://localhost:3000/upstream/` directly — should be 404 (proxy is gone).
 
 ## What you cannot test without external resources
 
@@ -100,12 +105,12 @@ Then primary flow:
 
 ## Common pitfalls
 
-- If `/upstream/` returns 200 but assets 404, the `NEXT_PUBLIC_BASE_PATH` build arg likely wasn't passed — re-build with `docker compose build chatgpt2api --no-cache`.
-- If the iframe shows a blank page, check the browser console for CSP / frame-ancestors errors (we currently set no CSP, so it should just work; if it doesn't, that may have changed).
-- If anonymous `/upstream/` gives 502/504 instead of 302, the proxy is forwarding before checking auth — auth check should always run first inside `handleUpstream` in `server.js`.
+- The `/api/admin/upstream/*` tabs return 503 if `UPSTREAM_PROXY_BASE_URL` or `CHATGPT2API_AUTH_KEY` is empty — check the app container env if the page shows "Upstream (chatgpt2api) is not configured".
+- chatgpt2api still mounts admin APIs under `/upstream/api/*` (controlled by `BASE_PATH=/upstream` in compose). If you remove that env var, the app's admin tabs will all 404 with no obvious clue — the bearer-protected calls in `src/upstream-api-client.js` hard-code `ADMIN_BASE_PATH=/upstream`.
+- The 注册机 tab polls every 2s while focused. If you see "register poll failed" in the JS console, it's almost always a session timeout — re-login and the polling resumes.
 - The admin user is bootstrapped from `.env` on every container start; if you change `ADMIN_EMAIL` after first boot, the new user is created but the old one persists in MySQL.
 - `docker compose down -v` drops the MySQL volume — destroys the admin user, redeem codes, and credit transactions. Use `docker compose down` (no `-v`) to keep state.
 
 ## Devin secrets needed
 
-None for local testing. The `.env.example` defaults are sufficient. If testing real image generation on a server, you would need a ChatGPT Plus session cookie/token configured inside the chatgpt2api admin UI (under 上游管理 → 号池管理).
+None for local testing. The `.env.example` defaults are sufficient. If testing real image generation on a server, you would need a ChatGPT Plus session cookie/token configured via the native 号池 tab (or the 注册机 tab can auto-acquire one).
