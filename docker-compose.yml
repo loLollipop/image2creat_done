@@ -93,6 +93,10 @@ services:
       ADMIN_NAME: ${ADMIN_NAME:-Admin}
       AI_API_BASE_URL: http://chatgpt2api:80/v1
       AI_API_KEY: ${CHATGPT2API_AUTH_KEY:-chatgpt2api}
+      # Bearer for the native admin proxy at /api/admin/upstream/* (account
+      # pool management). Same key the iframe asks for; image2creat_done uses
+      # it to call chatgpt2api admin APIs over the docker network.
+      CHATGPT2API_AUTH_KEY: ${CHATGPT2API_AUTH_KEY:-chatgpt2api}
       # Optional second upstream — a CLIProxyAPI / OpenAI-compatible bearer
       # endpoint. Leave blank to keep chatgpt2api as the only upstream.
       CPA_API_BASE_URL: ${CPA_API_BASE_URL:-}

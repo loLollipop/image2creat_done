@@ -31,6 +31,7 @@ loadEnvFile(path.join(ROOT_DIR, ".env"));
 
 const store = require("./src/mysql-store");
 const { createUpstreamProxy } = require("./src/upstream-proxy");
+const upstreamApi = require("./src/upstream-api-client");
 
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(ROOT_DIR, "data"));
@@ -1032,6 +1033,81 @@ async function routeApi(req, res, url) {
     const limit = sanitizePositiveInt(url.searchParams.get("limit"), 200, 2000);
     const payments = await store.listPayments({ status, limit });
     return sendJson(res, 200, { payments });
+  }
+
+  // ---------- Upstream (chatgpt2api) account pool admin ----------
+  // Native admin pages call these; we forward to chatgpt2api's /upstream/api/*
+  // with the bearer auth key so admins don't need to log into the iframe.
+  if (req.method === "GET" && url.pathname === "/api/admin/upstream/accounts") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    if (!upstreamApi.isConfigured()) {
+      return sendJson(res, 503, { error: "Upstream (chatgpt2api) is not configured" });
+    }
+    const { status, data } = await upstreamApi.adminRequest("GET", "/api/accounts");
+    return sendJson(res, status || 502, data ?? {});
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/admin/upstream/accounts") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    if (!upstreamApi.isConfigured()) {
+      return sendJson(res, 503, { error: "Upstream (chatgpt2api) is not configured" });
+    }
+    const body = await readJsonBody(req);
+    const payload = {};
+    if (Array.isArray(body.tokens)) payload.tokens = body.tokens;
+    if (Array.isArray(body.entries)) payload.entries = body.entries;
+    const { status, data } = await upstreamApi.adminRequest("POST", "/api/accounts", payload);
+    return sendJson(res, status || 502, data ?? {});
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/api/admin/upstream/accounts") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    if (!upstreamApi.isConfigured()) {
+      return sendJson(res, 503, { error: "Upstream (chatgpt2api) is not configured" });
+    }
+    const body = await readJsonBody(req);
+    const payload = { tokens: Array.isArray(body.tokens) ? body.tokens : [] };
+    const { status, data } = await upstreamApi.adminRequest("DELETE", "/api/accounts", payload);
+    return sendJson(res, status || 502, data ?? {});
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/admin/upstream/accounts/refresh") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    if (!upstreamApi.isConfigured()) {
+      return sendJson(res, 503, { error: "Upstream (chatgpt2api) is not configured" });
+    }
+    const body = await readJsonBody(req);
+    const payload = {
+      access_tokens: Array.isArray(body.access_tokens) ? body.access_tokens : []
+    };
+    const { status, data } = await upstreamApi.adminRequest("POST", "/api/accounts/refresh", payload);
+    return sendJson(res, status || 502, data ?? {});
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/admin/upstream/accounts/update") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    if (!upstreamApi.isConfigured()) {
+      return sendJson(res, 503, { error: "Upstream (chatgpt2api) is not configured" });
+    }
+    const body = await readJsonBody(req);
+    const payload = {};
+    if (typeof body.access_token === "string") payload.access_token = body.access_token;
+    if (typeof body.type === "string") payload.type = body.type;
+    if (typeof body.status === "string") payload.status = body.status;
+    if (body.quota !== undefined && body.quota !== null) payload.quota = body.quota;
+    if (typeof body.session_token === "string") payload.session_token = body.session_token;
+    const { status, data } = await upstreamApi.adminRequest("POST", "/api/accounts/update", payload);
+    return sendJson(res, status || 502, data ?? {});
   }
 
   if (req.method === "GET" && url.pathname === "/api/images/history") {

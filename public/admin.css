@@ -299,6 +299,11 @@ tr:last-child td {
   color: #b42318;
 }
 
+.status.warn {
+  background: #fff7ed;
+  color: #b45309;
+}
+
 .thumb {
   width: 72px;
   height: 72px;
