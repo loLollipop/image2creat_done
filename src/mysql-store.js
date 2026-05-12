@@ -128,6 +128,8 @@ function mapGeneration(row) {
     id: row.id,
     userId: row.user_id,
     conversationId: row.conversation_id || null,
+    operationType: row.operation_type || "generate",
+    sourceGenerationId: row.source_generation_id || null,
     prompt: row.prompt,
     model: row.model,
     size: row.size,
@@ -275,6 +277,9 @@ async function runMigrations() {
     CREATE TABLE IF NOT EXISTS generations (
       id VARCHAR(32) NOT NULL PRIMARY KEY,
       user_id VARCHAR(32) NOT NULL,
+      conversation_id VARCHAR(32) NULL,
+      operation_type VARCHAR(16) NOT NULL DEFAULT 'generate',
+      source_generation_id VARCHAR(32) NULL,
       prompt TEXT NOT NULL,
       model VARCHAR(80) NOT NULL,
       size VARCHAR(20) NOT NULL,
@@ -289,6 +294,8 @@ async function runMigrations() {
       created_at DATETIME(3) NOT NULL,
       INDEX idx_generations_user_created (user_id, created_at),
       INDEX idx_generations_created_at (created_at),
+      INDEX idx_generations_conversation (conversation_id),
+      INDEX idx_generations_source (source_generation_id),
       CONSTRAINT fk_generations_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
@@ -402,6 +409,17 @@ async function runMigrations() {
   if (!genConvCol.length) {
     await db.query("ALTER TABLE generations ADD COLUMN conversation_id VARCHAR(32) NULL AFTER user_id");
     await db.query("ALTER TABLE generations ADD INDEX idx_generations_conversation (conversation_id)");
+  }
+
+  const [genOperationCol] = await db.execute("SHOW COLUMNS FROM generations LIKE 'operation_type'");
+  if (!genOperationCol.length) {
+    await db.query("ALTER TABLE generations ADD COLUMN operation_type VARCHAR(16) NOT NULL DEFAULT 'generate' AFTER conversation_id");
+  }
+
+  const [genSourceCol] = await db.execute("SHOW COLUMNS FROM generations LIKE 'source_generation_id'");
+  if (!genSourceCol.length) {
+    await db.query("ALTER TABLE generations ADD COLUMN source_generation_id VARCHAR(32) NULL AFTER operation_type");
+    await db.query("ALTER TABLE generations ADD INDEX idx_generations_source (source_generation_id)");
   }
 
   await db.query(`
@@ -890,12 +908,14 @@ async function insertGenerations(generations) {
     for (const generation of generations) {
       await connection.execute(
         `INSERT INTO generations
-          (id, user_id, conversation_id, prompt, model, size, quality, background, output_format, filename, is_public, revised_prompt, usage_json, upstream_used, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, user_id, conversation_id, operation_type, source_generation_id, prompt, model, size, quality, background, output_format, filename, is_public, revised_prompt, usage_json, upstream_used, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           generation.id,
           generation.userId,
           generation.conversationId || null,
+          generation.operationType || "generate",
+          generation.sourceGenerationId || null,
           generation.prompt,
           generation.model,
           generation.size,

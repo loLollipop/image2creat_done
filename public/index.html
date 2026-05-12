@@ -83,7 +83,12 @@
             <span data-i18n="headPost">世界</span>
           </h1>
           <p data-i18n="desc" class="hero-desc">用 GPT Image 将你的创意变为精美图片，只需描述你脑海中的画面。</p>
-          <div id="heroComposerMount" class="composer-mount"></div>
+          <div class="hero-cta-wrap">
+            <button id="startCreateBtn" class="hero-start-button" type="button">
+              <i class="ri-sparkling-2-fill"></i>
+              <span data-i18n="startCreate">开始创作</span>
+            </button>
+          </div>
           <p class="reviews"><i class="ri-image-circle-line"></i><span data-i18n="reviews">生成后会自动保存到你的图库</span></p>
         </section>
 
@@ -108,13 +113,96 @@
       </main>
 
       <main id="chatView" class="chat-view hidden">
-        <div id="generationStatus" class="generation-status hidden">
-          <div class="paint-drip" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
-          <span id="funMessage">Generating...</span>
-        </div>
-        <div id="historyList" class="history-list"></div>
-        <div class="bottom-spacer"></div>
-        <div id="stickyComposerMount" class="sticky-composer"></div>
+        <section class="workspace-shell">
+          <aside class="workspace-sidebar">
+            <div class="workspace-sidebar-header">
+              <div>
+                <span class="workspace-sidebar-kicker">Workspace</span>
+                <strong>创作会话</strong>
+              </div>
+              <button id="workspaceNewBtn" class="workspace-new-btn" type="button"><i class="ri-add-line"></i> 新建</button>
+            </div>
+            <div id="workspaceConvList" class="workspace-conv-list"></div>
+          </aside>
+          <section class="workspace-main">
+            <div id="workspaceThread" class="workspace-thread">
+              <div id="generationStatus" class="generation-status hidden">
+                <div class="paint-drip" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+                <span id="funMessage">Generating...</span>
+              </div>
+              <div id="historyList" class="history-list"></div>
+              <section id="editorView" class="workspace-editor-panel hidden">
+                <section class="editor-stage">
+                  <div class="editor-header">
+                    <button class="editor-brand" type="button" data-editor-home>
+                      <span class="brand-dot"><i class="ri-image-spark-line"></i></span>
+                      <span data-i18n="imageEditor">图片编辑</span>
+                    </button>
+                    <div class="editor-tabs" aria-label="创作模式">
+                      <button type="button" data-editor-create>
+                        <i class="ri-sparkling-2-line"></i>
+                        <span data-i18n="create">生成</span>
+                      </button>
+                      <button class="active" type="button">
+                        <i class="ri-pencil-ruler-2-line"></i>
+                        <span data-i18n="editImage">编辑</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="editor-workspace">
+                    <div class="editor-toolbar" role="toolbar" aria-label="编辑工具">
+                      <button class="active" type="button" data-editor-tool="brush" title="画笔"><i class="ri-brush-line"></i></button>
+                      <button type="button" data-editor-tool="rect" title="矩形"><i class="ri-checkbox-blank-line"></i></button>
+                      <button type="button" data-editor-tool="eraser" title="橡皮擦"><i class="ri-eraser-line"></i></button>
+                      <button type="button" data-editor-undo title="撤销"><i class="ri-arrow-go-back-line"></i></button>
+                      <input id="editorColorInput" type="color" value="#7c3aed" title="标记颜色">
+                    </div>
+                    <div id="editorCanvasArea" class="editor-canvas-area">
+                      <label id="editorUploadCard" class="editor-upload-card">
+                        <i class="ri-image-add-line"></i>
+                        <strong data-i18n="uploadEditImage">上传或从作品中选择图片</strong>
+                        <span data-i18n="uploadEditHint">支持画笔、矩形选区和局部编辑描述</span>
+                        <input id="editorUploadInput" type="file" accept="image/*">
+                      </label>
+                      <div id="editorImageFrame" class="editor-image-frame hidden">
+                        <div id="editorImageScaler" class="editor-image-scaler">
+                          <img id="editorSourceImage" alt="编辑图片">
+                          <canvas id="editorMaskCanvas"></canvas>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="editor-zoom">
+                      <button type="button" data-editor-zoom="-"><i class="ri-subtract-line"></i></button>
+                      <span id="editorZoomText">100%</span>
+                      <button type="button" data-editor-zoom="+"><i class="ri-add-line"></i></button>
+                    </div>
+                    <label class="editor-keyboard" title="快捷键"><i class="ri-keyboard-line"></i></label>
+                    <form id="editorPromptForm" class="editor-prompt-bar">
+                      <label class="editor-attach">
+                        <i class="ri-image-add-line"></i>
+                        <input id="editorBottomUploadInput" type="file" accept="image/*">
+                      </label>
+                      <i class="ri-sparkling-2-fill editor-prompt-icon"></i>
+                      <input id="editorPromptInput" placeholder="让背景池塘开满荷花">
+                      <label class="square-toggle editor-public-toggle">
+                        <span data-i18n="publishToSquare">公开到广场</span>
+                        <input id="editorPublicInput" type="checkbox">
+                        <span class="toggle-track" aria-hidden="true"></span>
+                      </label>
+                      <button type="submit">
+                        <span data-i18n="create">生成</span>
+                        <i class="ri-arrow-right-line"></i>
+                      </button>
+                    </form>
+                  </div>
+                </section>
+              </section>
+              <div class="bottom-spacer"></div>
+            </div>
+            <div id="stickyComposerMount" class="sticky-composer"></div>
+          </section>
+        </section>
       </main>
 
       <main id="libraryView" class="library-view hidden">
@@ -131,74 +219,6 @@
           <div id="tagFilters" class="tag-filters"></div>
         </section>
         <section id="promptGrid" class="prompt-grid"></section>
-      </main>
-
-      <main id="editorView" class="editor-view hidden">
-        <section class="editor-stage">
-          <div class="editor-header">
-            <button class="editor-brand" type="button" data-editor-home>
-              <span class="brand-dot"><i class="ri-image-spark-line"></i></span>
-              <span data-i18n="imageEditor">图片编辑</span>
-            </button>
-            <div class="editor-tabs" aria-label="创作模式">
-              <button type="button" data-editor-create>
-                <i class="ri-sparkling-2-line"></i>
-                <span data-i18n="create">生成</span>
-              </button>
-              <button class="active" type="button">
-                <i class="ri-pencil-ruler-2-line"></i>
-                <span data-i18n="editImage">编辑</span>
-              </button>
-            </div>
-          </div>
-
-          <div class="editor-workspace">
-            <div class="editor-toolbar" role="toolbar" aria-label="编辑工具">
-              <button class="active" type="button" data-editor-tool="brush" title="画笔"><i class="ri-brush-line"></i></button>
-              <button type="button" data-editor-tool="rect" title="矩形"><i class="ri-checkbox-blank-line"></i></button>
-              <button type="button" data-editor-tool="eraser" title="橡皮擦"><i class="ri-eraser-line"></i></button>
-              <button type="button" data-editor-undo title="撤销"><i class="ri-arrow-go-back-line"></i></button>
-              <input id="editorColorInput" type="color" value="#7c3aed" title="标记颜色">
-            </div>
-            <div id="editorCanvasArea" class="editor-canvas-area">
-              <label id="editorUploadCard" class="editor-upload-card">
-                <i class="ri-image-add-line"></i>
-                <strong data-i18n="uploadEditImage">上传或从作品中选择图片</strong>
-                <span data-i18n="uploadEditHint">支持画笔、矩形选区和局部编辑描述</span>
-                <input id="editorUploadInput" type="file" accept="image/*">
-              </label>
-              <div id="editorImageFrame" class="editor-image-frame hidden">
-                <div id="editorImageScaler" class="editor-image-scaler">
-                  <img id="editorSourceImage" alt="编辑图片">
-                  <canvas id="editorMaskCanvas"></canvas>
-                </div>
-              </div>
-            </div>
-            <div class="editor-zoom">
-              <button type="button" data-editor-zoom="-"><i class="ri-subtract-line"></i></button>
-              <span id="editorZoomText">100%</span>
-              <button type="button" data-editor-zoom="+"><i class="ri-add-line"></i></button>
-            </div>
-            <label class="editor-keyboard" title="快捷键"><i class="ri-keyboard-line"></i></label>
-            <form id="editorPromptForm" class="editor-prompt-bar">
-              <label class="editor-attach">
-                <i class="ri-image-add-line"></i>
-                <input id="editorBottomUploadInput" type="file" accept="image/*">
-              </label>
-              <i class="ri-sparkling-2-fill editor-prompt-icon"></i>
-              <input id="editorPromptInput" placeholder="让背景池塘开满荷花">
-              <label class="square-toggle editor-public-toggle">
-                <span data-i18n="publishToSquare">公开到广场</span>
-                <input id="editorPublicInput" type="checkbox">
-                <span class="toggle-track" aria-hidden="true"></span>
-              </label>
-              <button type="submit">
-                <span data-i18n="create">生成</span>
-                <i class="ri-arrow-right-line"></i>
-              </button>
-            </form>
-          </div>
-        </section>
       </main>
 
       <template id="composerTemplate">

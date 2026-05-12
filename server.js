@@ -384,6 +384,23 @@ function getUserAgent(req) {
   return String(req.headers["user-agent"] || "").slice(0, 512);
 }
 
+async function resolveConversationForRequest(user, rawConversationId) {
+  let conversationId = String(rawConversationId || "").trim() || null;
+  if (conversationId) {
+    const conversation = await store.getConversationById(conversationId);
+    if (!conversation || conversation.userId !== user.id) conversationId = null;
+  }
+  return conversationId;
+}
+
+async function resolveSourceGenerationForRequest(user, rawSourceGenerationId) {
+  const sourceGenerationId = String(rawSourceGenerationId || "").trim() || null;
+  if (!sourceGenerationId) return null;
+  const generation = await store.getGenerationById(sourceGenerationId);
+  if (!generation || !canTouchGeneration(user, generation)) return null;
+  return generation.id;
+}
+
 function enforceGenerationRate(userId) {
   const now = Date.now();
   const windowMs = 60 * 1000;
@@ -611,6 +628,8 @@ async function saveGeneratedImages(user, request, openaiResult, upstreamUsed = "
       id,
       userId: user.id,
       conversationId: request.conversationId || null,
+      operationType: request.operationType || "generate",
+      sourceGenerationId: request.sourceGenerationId || null,
       prompt: request.prompt,
       model: request.model,
       size: request.size,
@@ -1378,16 +1397,10 @@ async function routeApi(req, res, url) {
       throw httpError("Account is not active", 403);
     }
 
-    // Conversation support: use existing or auto-create
-    let conversationId = String(body.conversationId || "").trim() || null;
-    if (conversationId) {
-      const conv = await store.getConversationById(conversationId);
-      if (!conv || conv.userId !== user.id) conversationId = null;
-    }
-    if (!conversationId) {
-      const conv = await store.createConversation(user.id, prompt.slice(0, 60));
-      conversationId = conv.id;
-    }
+    let conversationId = await resolveConversationForRequest(user, body.conversationId);
+    let autoCreatedConversationId = null;
+    let generationsPersisted = false;
+    const sourceGenerationId = await resolveSourceGenerationForRequest(user, body.sourceGenerationId);
 
     const maxImages = Number(settings.maxImagesPerRequest || 1);
     const n = sanitizePositiveInt(body.n, 1, maxImages);
@@ -1404,7 +1417,9 @@ async function routeApi(req, res, url) {
       background: choose(body.background, ["auto", "opaque", "transparent"], "auto"),
       output_format: choose(body.outputFormat, ["png", "webp", "jpeg"], "png"),
       isPublic: body.isPublic === true,
-      conversationId
+      conversationId,
+      operationType: "generate",
+      sourceGenerationId
     };
     const openaiRequest = {
       model: request.model,
@@ -1445,11 +1460,18 @@ async function routeApi(req, res, url) {
 
     try {
       const openaiResult = await callOpenAIImages(settings, openaiRequest);
+      if (!conversationId) {
+        const conversation = await store.createConversation(user.id, prompt.slice(0, 60));
+        conversationId = conversation.id;
+        autoCreatedConversationId = conversation.id;
+        request.conversationId = conversation.id;
+      }
       const saved = await saveGeneratedImages(user, request, openaiResult, activeUpstream);
       if (!saved.length) {
         throw httpError("OpenAI did not return a savable image", 502);
       }
       await store.insertGenerations(saved);
+      generationsPersisted = true;
       await store.updateGenerationRequest(auditId, {
         status: "success",
         firstGenerationId: saved[0]?.id || "",
@@ -1477,6 +1499,9 @@ async function routeApi(req, res, url) {
         generationCost: costPerImage
       });
     } catch (error) {
+      if (autoCreatedConversationId && !generationsPersisted) {
+        await store.deleteConversation(autoCreatedConversationId).catch(() => {});
+      }
       if (reservedCredits) {
         await store.addCredits(user.id, totalCost, {
           type: "refund_failure",
@@ -1516,6 +1541,10 @@ async function routeApi(req, res, url) {
       throw httpError("Account is not active", 403);
     }
 
+    let conversationId = await resolveConversationForRequest(user, body.conversationId);
+    let autoCreatedConversationId = null;
+    let generationsPersisted = false;
+    const sourceGenerationId = await resolveSourceGenerationForRequest(user, body.sourceGenerationId);
     const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
     const activeUpstream = getActiveUpstreamId(settings);
     const activeModel = getUpstreamConfig(settings, activeUpstream).model;
@@ -1527,7 +1556,10 @@ async function routeApi(req, res, url) {
       quality: "auto",
       background: "auto",
       output_format: "png",
-      isPublic: body.isPublic === true
+      isPublic: body.isPublic === true,
+      conversationId,
+      operationType: "edit",
+      sourceGenerationId
     };
     const auditId = randomId("req_");
     await store.insertGenerationRequest({
@@ -1570,24 +1602,38 @@ async function routeApi(req, res, url) {
 
     try {
       const openaiResult = await callOpenAIImageEdits(settings, payload);
+      if (!conversationId) {
+        const conversation = await store.createConversation(user.id, prompt.slice(0, 60));
+        conversationId = conversation.id;
+        autoCreatedConversationId = conversation.id;
+        request.conversationId = conversation.id;
+      }
       const saved = await saveGeneratedImages(user, request, openaiResult, activeUpstream);
       if (!saved.length) {
         throw httpError("OpenAI did not return a savable edited image", 502);
       }
       await store.insertGenerations(saved);
+      generationsPersisted = true;
       await store.updateGenerationRequest(auditId, {
         status: "success",
         firstGenerationId: saved[0]?.id || "",
         generationIds: saved.map((generation) => generation.id)
       });
       reservedCredits = false;
+      if (conversationId) {
+        await store.touchConversation(conversationId).catch(() => {});
+      }
 
       return sendJson(res, 200, {
         generations: saved,
+        conversationId,
         credits: await store.getUserCredits(user.id),
         generationCost: costPerImage
       });
     } catch (error) {
+      if (autoCreatedConversationId && !generationsPersisted) {
+        await store.deleteConversation(autoCreatedConversationId).catch(() => {});
+      }
       if (reservedCredits) {
         await store.addCredits(user.id, costPerImage, {
           type: "refund_failure",

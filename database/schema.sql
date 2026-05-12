@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS generations (
   id VARCHAR(32) NOT NULL PRIMARY KEY,
   user_id VARCHAR(32) NOT NULL,
+  conversation_id VARCHAR(32) NULL,
+  operation_type VARCHAR(16) NOT NULL DEFAULT 'generate',
+  source_generation_id VARCHAR(32) NULL,
   prompt TEXT NOT NULL,
   model VARCHAR(80) NOT NULL,
   size VARCHAR(20) NOT NULL,
@@ -69,7 +72,19 @@ CREATE TABLE IF NOT EXISTS generations (
   created_at DATETIME(3) NOT NULL,
   INDEX idx_generations_user_created (user_id, created_at),
   INDEX idx_generations_created_at (created_at),
+  INDEX idx_generations_conversation (conversation_id),
+  INDEX idx_generations_source (source_generation_id),
   CONSTRAINT fk_generations_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id VARCHAR(32) NOT NULL PRIMARY KEY,
+  user_id VARCHAR(32) NOT NULL,
+  title VARCHAR(255) NOT NULL DEFAULT '',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_conversations_user_updated (user_id, updated_at),
+  CONSTRAINT fk_conversations_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS user_daily_usage (
