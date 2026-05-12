@@ -538,6 +538,9 @@ function updateNav() {
   elements.creditsBtn.classList.toggle("hidden", !loggedIn);
   elements.myWorksBtn.classList.toggle("hidden", !loggedIn);
   elements.creditsText.textContent = state.user ? `${text("credits")} ${state.user.credits}` : "0";
+  // Show/hide conversation sidebar button
+  const convBtn = document.getElementById("convSidebarBtn");
+  if (convBtn) convBtn.classList.toggle("hidden", !loggedIn);
 
   const hasApiKey = Boolean(state.settings?.hasApiKey);
   elements.apiStatus.textContent = hasApiKey
@@ -2196,3 +2199,162 @@ function bindGlobalEvents() {
 bindGlobalEvents();
 bootstrap();
 loadPromptLibrary();
+
+
+
+// ===================== Conversation Sidebar =====================
+
+const convSidebar = $("#convSidebar");
+const convOverlay = $("#convOverlay");
+const convList = $("#convList");
+const convSidebarBtn = $("#convSidebarBtn");
+const convSidebarClose = $("#convSidebarClose");
+const convNewBtn = $("#convNewBtn");
+
+let conversations = [];
+let activeConversationId = null;
+
+function openConvSidebar() {
+  convSidebar.classList.add("open");
+  convSidebar.classList.remove("hidden");
+  convOverlay.classList.remove("hidden");
+  loadConversations();
+}
+
+function closeConvSidebar() {
+  convSidebar.classList.remove("open");
+  convOverlay.classList.add("hidden");
+}
+
+convSidebarBtn?.addEventListener("click", openConvSidebar);
+convSidebarClose?.addEventListener("click", closeConvSidebar);
+convOverlay?.addEventListener("click", closeConvSidebar);
+
+convNewBtn?.addEventListener("click", () => {
+  activeConversationId = null;
+  state.history = [];
+  state.forceHero = true;
+  renderAll();
+  closeConvSidebar();
+});
+
+async function loadConversations() {
+  if (!state.user) { conversations = []; renderConvList(); return; }
+  try {
+    const data = await api("/api/conversations");
+    conversations = data.conversations || [];
+  } catch { conversations = []; }
+  renderConvList();
+}
+
+function renderConvList() {
+  if (!convList) return;
+  convList.innerHTML = conversations.length
+    ? conversations.map((c) => `
+        <button class="conv-list-item ${c.id === activeConversationId ? "active" : ""}" data-conv-id="${c.id}">
+          <i class="ri-chat-3-line" style="flex-shrink:0;opacity:0.5"></i>
+          <span class="conv-title">${escapeHtml(c.title || "新对话")}</span>
+          <span class="conv-del" data-del-conv="${c.id}" title="删除"><i class="ri-delete-bin-line"></i></span>
+        </button>
+      `).join("")
+    : `<div style="padding:20px;text-align:center;color:#64748b;font-size:13px">暂无对话记录</div>`;
+
+  $$("[data-conv-id]", convList).forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      if (e.target.closest("[data-del-conv]")) return;
+      switchToConversation(btn.dataset.convId);
+    });
+  });
+  $$("[data-del-conv]", convList).forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!confirm("确认删除此对话？")) return;
+      try {
+        await api(`/api/conversations/${btn.dataset.delConv}`, { method: "DELETE" });
+        if (activeConversationId === btn.dataset.delConv) {
+          activeConversationId = null;
+          state.history = [];
+          state.forceHero = true;
+          renderAll();
+        }
+        await loadConversations();
+      } catch (err) { showToast(err.message, "ri-error-warning-line"); }
+    });
+  });
+}
+
+async function switchToConversation(convId) {
+  activeConversationId = convId;
+  closeConvSidebar();
+  try {
+    const data = await api(`/api/conversations/${convId}`);
+    state.history = (data.messages || []).map((gen) => ({
+      id: gen.id,
+      prompt: gen.prompt,
+      images: [gen.imageUrl],
+      status: "done",
+      time: gen.createdAt,
+      model: gen.model,
+      isPublic: Boolean(gen.isPublic),
+      options: { size: gen.size, quality: gen.quality, background: gen.background, outputFormat: gen.outputFormat }
+    }));
+    state.forceHero = false;
+    renderAll();
+    scrollToBottom();
+  } catch (err) {
+    showToast(err.message, "ri-error-warning-line");
+  }
+}
+
+// Patch submitGeneration to include conversationId
+const _origSubmitGeneration = submitGeneration;
+// We need to intercept the API call in submitGeneration.
+// Since submitGeneration calls api("/api/images/generate", ...) with body,
+// the easiest way is to monkey-patch the generation payload.
+// Let's override via wrapping the fetch body construction.
+
+// Actually, let's just patch the JSON.stringify call by adding conversationId
+// to the body object before it's sent. We do this by wrapping the api function
+// specifically for the generate endpoint.
+
+const _originalApi = api;
+// No need - let's add conversationId to state and use it in submitGeneration.
+// The simplest approach: add a MutationObserver or patch the submit flow.
+
+// Simplest: override submitGeneration to inject conversationId
+// The original submitGeneration is defined with `async function submitGeneration(form)`
+// and calls api("/api/images/generate", { method: "POST", body: JSON.stringify({...}) })
+// 
+// We'll monkey-patch the global `api` to intercept generate calls:
+
+(function patchApiForConversations() {
+  const origFetch = window.fetch;
+  window.fetch = async function(url, options) {
+    if (typeof url === "string" && url === "/api/images/generate" && options?.body) {
+      try {
+        const body = JSON.parse(options.body);
+        if (activeConversationId && !body.conversationId) {
+          body.conversationId = activeConversationId;
+          options = { ...options, body: JSON.stringify(body) };
+        }
+      } catch {}
+    }
+    const response = await origFetch.call(this, url, options);
+
+    // After generate succeeds, capture conversationId from response
+    if (typeof url === "string" && url === "/api/images/generate" && response.ok) {
+      const cloned = response.clone();
+      try {
+        const data = await cloned.json();
+        if (data.conversationId && !activeConversationId) {
+          activeConversationId = data.conversationId;
+          // Reload conversations list in background
+          loadConversations();
+        }
+      } catch {}
+    }
+    return response;
+  };
+})();
+
+// Show/hide the conversation button based on login state - handled in updateNav above
