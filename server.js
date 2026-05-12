@@ -610,6 +610,7 @@ async function saveGeneratedImages(user, request, openaiResult, upstreamUsed = "
     const generation = {
       id,
       userId: user.id,
+      conversationId: request.conversationId || null,
       prompt: request.prompt,
       model: request.model,
       size: request.size,
@@ -1283,6 +1284,64 @@ async function routeApi(req, res, url) {
     return sendJson(res, status || 502, data ?? {});
   }
 
+  // ---------- Conversations CRUD ----------
+  if (req.method === "POST" && url.pathname === "/api/conversations") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    const body = await readJsonBody(req);
+    const title = String(body.title || "").trim().slice(0, 255);
+    const conversation = await store.createConversation(current.user.id, title);
+    return sendJson(res, 201, { conversation });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/conversations") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    const limit = sanitizePositiveInt(url.searchParams.get("limit"), 50, 200);
+    const conversations = await store.listConversations(current.user.id, limit);
+    return sendJson(res, 200, { conversations });
+  }
+
+  const convDetailMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)$/);
+  if (convDetailMatch && req.method === "GET") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    const conversation = await store.getConversationById(convDetailMatch[1]);
+    if (!conversation || conversation.userId !== current.user.id) {
+      throw httpError("Conversation not found", 404);
+    }
+    const generations = (await store.listGenerationsForConversation(conversation.id)).map((g) => ({
+      ...g,
+      imageUrl: `/api/images/${g.id}/file`
+    }));
+    return sendJson(res, 200, { conversation, messages: generations });
+  }
+
+  if (convDetailMatch && req.method === "PATCH") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    const conversation = await store.getConversationById(convDetailMatch[1]);
+    if (!conversation || conversation.userId !== current.user.id) {
+      throw httpError("Conversation not found", 404);
+    }
+    const body = await readJsonBody(req);
+    const patch = {};
+    if (typeof body.title === "string") patch.title = body.title.trim().slice(0, 255);
+    await store.updateConversation(conversation.id, patch);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (convDetailMatch && req.method === "DELETE") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    const conversation = await store.getConversationById(convDetailMatch[1]);
+    if (!conversation || conversation.userId !== current.user.id) {
+      throw httpError("Conversation not found", 404);
+    }
+    await store.deleteConversation(conversation.id);
+    return sendJson(res, 204, null);
+  }
+
   if (req.method === "GET" && url.pathname === "/api/images/history") {
     const current = await getCurrentUser(req);
     ensureAuthenticated(current);
@@ -1319,6 +1378,17 @@ async function routeApi(req, res, url) {
       throw httpError("Account is not active", 403);
     }
 
+    // Conversation support: use existing or auto-create
+    let conversationId = String(body.conversationId || "").trim() || null;
+    if (conversationId) {
+      const conv = await store.getConversationById(conversationId);
+      if (!conv || conv.userId !== user.id) conversationId = null;
+    }
+    if (!conversationId) {
+      const conv = await store.createConversation(user.id, prompt.slice(0, 60));
+      conversationId = conv.id;
+    }
+
     const maxImages = Number(settings.maxImagesPerRequest || 1);
     const n = sanitizePositiveInt(body.n, 1, maxImages);
     const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
@@ -1333,7 +1403,8 @@ async function routeApi(req, res, url) {
       quality: choose(body.quality, ["auto", "low", "medium", "high"], "auto"),
       background: choose(body.background, ["auto", "opaque", "transparent"], "auto"),
       output_format: choose(body.outputFormat, ["png", "webp", "jpeg"], "png"),
-      isPublic: body.isPublic === true
+      isPublic: body.isPublic === true,
+      conversationId
     };
     const openaiRequest = {
       model: request.model,
@@ -1394,8 +1465,14 @@ async function routeApi(req, res, url) {
         }).catch((error) => console.error(error));
       }
 
+      // Touch conversation updated_at
+      if (conversationId) {
+        await store.touchConversation(conversationId).catch(() => {});
+      }
+
       return sendJson(res, 200, {
         generations: saved,
+        conversationId,
         credits: await store.getUserCredits(user.id),
         generationCost: costPerImage
       });
