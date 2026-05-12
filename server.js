@@ -1110,6 +1110,40 @@ async function routeApi(req, res, url) {
     return sendJson(res, status || 502, data ?? {});
   }
 
+  // chatgpt2api logs.jsonl is exposed at /upstream/api/logs (GET) and
+  // /upstream/api/logs/delete (POST). Both are admin-gated upstream-side; we
+  // also gate them on our side with the existing image2creat_done admin session.
+  if (req.method === "GET" && url.pathname === "/api/admin/upstream/logs") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    if (!upstreamApi.isConfigured()) {
+      return sendJson(res, 503, { error: "Upstream (chatgpt2api) is not configured" });
+    }
+    const query = {
+      type: url.searchParams.get("type") || "",
+      start_date: url.searchParams.get("start_date") || "",
+      end_date: url.searchParams.get("end_date") || ""
+    };
+    const { status, data } = await upstreamApi.adminRequest("GET", "/api/logs", null, { query });
+    return sendJson(res, status || 502, data ?? {});
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/admin/upstream/logs/delete") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    if (!upstreamApi.isConfigured()) {
+      return sendJson(res, 503, { error: "Upstream (chatgpt2api) is not configured" });
+    }
+    const body = await readJsonBody(req);
+    const payload = {
+      ids: Array.isArray(body.ids) ? body.ids.map((id) => String(id || "")).filter(Boolean) : []
+    };
+    const { status, data } = await upstreamApi.adminRequest("POST", "/api/logs/delete", payload);
+    return sendJson(res, status || 502, data ?? {});
+  }
+
   if (req.method === "GET" && url.pathname === "/api/images/history") {
     const current = await getCurrentUser(req);
     ensureAuthenticated(current);

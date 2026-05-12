@@ -13,6 +13,11 @@ const state = {
   transactions: [],
   payments: [],
   accounts: [],
+  logs: [],
+  logsFilter: { type: "", start_date: "", end_date: "" },
+  logsExpanded: new Set(),
+  logsSelected: new Set(),
+  logsHighlightPrompt: "",
   lastBatch: null
 };
 
@@ -108,6 +113,7 @@ function renderAdmin() {
       <button class="secondary ${state.view === "transactions" ? "active" : ""}" data-view="transactions">积分流水</button>
       <button class="secondary ${state.view === "payments" ? "active" : ""}" data-view="payments">支付订单</button>
       <button class="secondary ${state.view === "accounts" ? "active" : ""}" data-view="accounts">号池</button>
+      <button class="secondary ${state.view === "logs" ? "active" : ""}" data-view="logs">调用日志</button>
       <button class="secondary ${state.view === "upstream" ? "active" : ""}" data-view="upstream">上游管理（旧）</button>
       <button class="secondary ${state.view === "settings" ? "active" : ""}" data-view="settings">接口设置</button>
     </div>
@@ -131,6 +137,7 @@ function renderPanel() {
   if (state.view === "transactions") return renderTransactions();
   if (state.view === "payments") return renderPayments();
   if (state.view === "accounts") return renderAccounts();
+  if (state.view === "logs") return renderLogs();
   if (state.view === "upstream") return renderUpstream();
   renderSettings();
 }
@@ -142,9 +149,9 @@ function renderUpstream() {
         <div>
           <h2>上游管理（旧 iframe）</h2>
           <p class="muted">
-            注意：号池现在已经原生集成到本站「号池」标签页，无需再进 iframe。
-            这里保留是为了访问 chatgpt2api 还没原生化的功能（注册机 / 日志 / 系统设置 / 备份）。
-            后续 PR 会逐个把这些功能也搬过来，最后会移除本页。
+            注意：号池已经原生集成到「号池」标签，调用日志已经原生集成到「调用日志」标签，无需再进 iframe。
+            这里保留是为了访问 chatgpt2api 还没原生化的功能（注册机 / 系统设置 / 备份）。
+            下一个 PR 会把这些也搬过来，最后会移除本页。
           </p>
         </div>
         <div class="upstream-header-actions">
@@ -410,6 +417,195 @@ function txLabel(type) {
   return TX_TYPE_LABELS[type] || type;
 }
 
+// chatgpt2api LogService writes two types: "call" (image/chat upstream calls)
+// and "account" (account pool events: 限流、移除异常账号、新增账号 etc).
+const LOG_TYPE_OPTIONS = [
+  { value: "", label: "全部类型" },
+  { value: "call", label: "上游调用" },
+  { value: "account", label: "号池事件" }
+];
+
+const LOG_TYPE_LABELS = { call: "上游调用", account: "号池事件" };
+
+function logTypeLabel(type) {
+  return LOG_TYPE_LABELS[type] || type || "-";
+}
+
+function logTypeClass(type) {
+  if (type === "call") return "";
+  if (type === "account") return "warn";
+  return "";
+}
+
+function logStatusClass(status) {
+  if (!status) return "";
+  return status === "failed" ? "failed" : "";
+}
+
+function logRowMatchesHighlight(item) {
+  const needle = (state.logsHighlightPrompt || "").trim();
+  if (!needle) return false;
+  const requestText = String(item?.detail?.request_text || "");
+  if (!requestText) return false;
+  const haystack = requestText.toLowerCase();
+  // chatgpt2api truncates request_text to ~1000 chars and collapses whitespace,
+  // so do a substring match on a short prefix of the original prompt.
+  const prefix = needle.slice(0, 60).toLowerCase();
+  return Boolean(prefix) && haystack.includes(prefix);
+}
+
+function renderLogs() {
+  const items = state.logs || [];
+  const filter = state.logsFilter || { type: "", start_date: "", end_date: "" };
+  const selectedCount = state.logsSelected ? state.logsSelected.size : 0;
+  $("#panel").innerHTML = `
+    <div class="card">
+      <div class="upstream-header">
+        <div>
+          <h2>调用日志（chatgpt2api）</h2>
+          <p class="muted">原生展示上游 <code>data/logs.jsonl</code> 的调用与号池事件。点击「详情」可展开完整 payload，支持按类型 / 日期筛选与批量删除。</p>
+        </div>
+        <div class="upstream-header-actions">
+          <button class="secondary" type="button" id="logsRefreshBtn">刷新</button>
+          <button class="secondary" type="button" id="logsDeleteBtn" ${selectedCount ? "" : "disabled"}>删除所选${selectedCount ? `（${selectedCount}）` : ""}</button>
+        </div>
+      </div>
+      <form id="logsFilterForm" class="form" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px">
+        <label style="flex:1 1 160px">类型
+          <select id="logsTypeInput">
+            ${LOG_TYPE_OPTIONS.map((opt) => `<option value="${escapeHtml(opt.value)}" ${filter.type === opt.value ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
+          </select>
+        </label>
+        <label style="flex:1 1 160px">起始日期
+          <input id="logsStartDateInput" type="date" value="${escapeHtml(filter.start_date || "")}">
+        </label>
+        <label style="flex:1 1 160px">结束日期
+          <input id="logsEndDateInput" type="date" value="${escapeHtml(filter.end_date || "")}">
+        </label>
+        <button class="primary" type="submit">应用</button>
+        <button class="secondary" type="button" id="logsResetBtn">重置</button>
+      </form>
+      ${state.logsHighlightPrompt ? `<p class="muted" style="margin-bottom:10px">已根据生图记录 prompt 高亮匹配的上游调用（<code>request_text</code> 前 60 字匹配）。<button class="tiny" type="button" id="logsClearHighlight">清除高亮</button></p>` : ""}
+      <div class="table-wrap">
+        ${items.length ? `
+          <table>
+            <thead>
+              <tr>
+                <th style="width:32px"><input type="checkbox" id="logsSelectAll"></th>
+                <th>时间</th>
+                <th>类型</th>
+                <th>摘要</th>
+                <th>模型</th>
+                <th>端点</th>
+                <th>状态</th>
+                <th>耗时</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${items.map((item) => {
+                const id = String(item.id || "");
+                const detail = item.detail || {};
+                const expanded = state.logsExpanded.has(id);
+                const selected = state.logsSelected.has(id);
+                const highlight = logRowMatchesHighlight(item);
+                const statusValue = String(detail.status || "");
+                const duration = detail.duration_ms !== undefined && detail.duration_ms !== null
+                  ? `${Number(detail.duration_ms)}ms`
+                  : "-";
+                return `
+                  <tr data-log-id="${escapeHtml(id)}" ${highlight ? `style="background:#fef9c3"` : ""}>
+                    <td><input type="checkbox" class="log-select" ${selected ? "checked" : ""}></td>
+                    <td>${escapeHtml(item.time || "-")}</td>
+                    <td><span class="status ${logTypeClass(item.type)}">${escapeHtml(logTypeLabel(item.type))}</span></td>
+                    <td class="prompt-cell">${escapeHtml(item.summary || "-")}${detail.error ? `<br><span class="muted">错误：${escapeHtml(String(detail.error).slice(0, 160))}</span>` : ""}</td>
+                    <td>${escapeHtml(detail.model || "-")}</td>
+                    <td>${escapeHtml(detail.endpoint || "-")}</td>
+                    <td>${statusValue ? `<span class="status ${logStatusClass(statusValue)}">${escapeHtml(statusValue)}</span>` : "-"}</td>
+                    <td>${escapeHtml(duration)}</td>
+                    <td><button class="tiny" type="button" data-action="toggle-detail">${expanded ? "收起" : "详情"}</button></td>
+                  </tr>
+                  ${expanded ? `<tr class="log-detail-row"><td></td><td colspan="8"><pre style="white-space:pre-wrap;word-break:break-word;background:var(--surface, #f8fafc);padding:10px;border-radius:8px;font-size:12px;margin:0;max-height:320px;overflow:auto">${escapeHtml(JSON.stringify(item, null, 2))}</pre></td></tr>` : ""}
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        ` : `<div class="empty">暂无日志记录${filter.type || filter.start_date || filter.end_date ? "（当前筛选条件下）" : ""}</div>`}
+      </div>
+    </div>
+  `;
+
+  $("#logsRefreshBtn").addEventListener("click", async () => {
+    await loadPanel();
+    renderLogs();
+  });
+  $("#logsFilterForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    state.logsFilter = {
+      type: $("#logsTypeInput").value || "",
+      start_date: $("#logsStartDateInput").value || "",
+      end_date: $("#logsEndDateInput").value || ""
+    };
+    state.logsExpanded = new Set();
+    state.logsSelected = new Set();
+    await loadPanel();
+    renderLogs();
+  });
+  $("#logsResetBtn").addEventListener("click", async () => {
+    state.logsFilter = { type: "", start_date: "", end_date: "" };
+    state.logsHighlightPrompt = "";
+    state.logsExpanded = new Set();
+    state.logsSelected = new Set();
+    await loadPanel();
+    renderLogs();
+  });
+  $("#logsClearHighlight")?.addEventListener("click", () => {
+    state.logsHighlightPrompt = "";
+    renderLogs();
+  });
+  $("#logsSelectAll")?.addEventListener("change", (event) => {
+    if (event.target.checked) {
+      state.logsSelected = new Set(items.map((item) => String(item.id || "")).filter(Boolean));
+    } else {
+      state.logsSelected = new Set();
+    }
+    renderLogs();
+  });
+  $("#logsDeleteBtn").addEventListener("click", () => deleteSelectedLogs());
+  $$("tr[data-log-id]").forEach((row) => {
+    const id = row.dataset.logId;
+    $(".log-select", row)?.addEventListener("change", (event) => {
+      if (event.target.checked) state.logsSelected.add(id);
+      else state.logsSelected.delete(id);
+      renderLogs();
+    });
+    $("button[data-action='toggle-detail']", row)?.addEventListener("click", () => {
+      if (state.logsExpanded.has(id)) state.logsExpanded.delete(id);
+      else state.logsExpanded.add(id);
+      renderLogs();
+    });
+  });
+}
+
+async function deleteSelectedLogs() {
+  const ids = [...state.logsSelected];
+  if (ids.length === 0) return;
+  if (!window.confirm(`确认删除 ${ids.length} 条日志？此操作不可撤销。`)) return;
+  try {
+    await api("/api/admin/upstream/logs/delete", {
+      method: "POST",
+      body: JSON.stringify({ ids })
+    });
+    toast(`已删除 ${ids.length} 条日志`);
+    state.logsSelected = new Set();
+    state.logsExpanded = new Set();
+    await loadPanel();
+    renderLogs();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 function renderRecords() {
   $("#panel").innerHTML = `
     <div class="card">
@@ -427,11 +623,12 @@ function renderRecords() {
                 <th>上游</th>
                 <th>状态</th>
                 <th>时间</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
               ${state.records.map((record) => `
-                <tr>
+                <tr data-record-id="${escapeHtml(record.id || record.firstGenerationId || "")}">
                   <td>${record.imageUrl ? `<a href="${escapeHtml(record.imageUrl)}" target="_blank"><img class="thumb" src="${escapeHtml(record.imageUrl)}" alt=""></a>` : `<div class="thumb"></div>`}</td>
                   <td><strong>${escapeHtml(record.userName || record.userEmail || "未知用户")}</strong><br><span class="muted">${escapeHtml(record.userEmail || record.userId)}</span></td>
                   <td class="prompt-cell">${escapeHtml(record.prompt)}${record.errorMessage ? `<br><span class="muted">错误：${escapeHtml(record.errorMessage)}</span>` : ""}</td>
@@ -440,6 +637,7 @@ function renderRecords() {
                   <td>${record.upstreamUsed ? `<span class="status">${escapeHtml(record.upstreamUsed)}</span>` : "-"}</td>
                   <td><span class="status ${record.status === "failed" ? "failed" : ""}">${escapeHtml(record.status)}</span></td>
                   <td>${fmt(record.createdAt)}</td>
+                  <td>${record.upstreamUsed === "chatgpt2api" ? `<button class="tiny" type="button" data-action="upstream-log" data-prompt="${escapeHtml(record.prompt || "")}" data-created="${escapeHtml(record.createdAt || "")}">上游日志</button>` : ""}</td>
                 </tr>
               `).join("")}
             </tbody>
@@ -448,6 +646,33 @@ function renderRecords() {
       </div>
     </div>
   `;
+  $$("button[data-action='upstream-log']").forEach((button) => {
+    button.addEventListener("click", () => jumpToUpstreamLog(button.dataset.prompt, button.dataset.created));
+  });
+}
+
+async function jumpToUpstreamLog(prompt, createdAt) {
+  const day = isoDay(createdAt);
+  state.logsFilter = { type: "call", start_date: day, end_date: day };
+  state.logsHighlightPrompt = String(prompt || "");
+  state.logsExpanded = new Set();
+  state.logsSelected = new Set();
+  state.view = "logs";
+  await loadPanel();
+  renderAdmin();
+}
+
+function isoDay(value) {
+  if (!value) return new Date().toISOString().slice(0, 10);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
+  // chatgpt2api stores its log day in local server time (YYYY-MM-DD slice of its
+  // local clock). Use the local-time date here so cross-linked filters line up
+  // when both containers share the host timezone (docker-compose default).
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const dayPart = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${dayPart}`;
 }
 
 function renderUsers() {
@@ -812,6 +1037,20 @@ async function loadPanel() {
       state.accounts = data.items || [];
     } catch (error) {
       state.accounts = [];
+      toast(error.message);
+    }
+  } else if (state.view === "logs") {
+    try {
+      const params = new URLSearchParams();
+      const filter = state.logsFilter || {};
+      if (filter.type) params.set("type", filter.type);
+      if (filter.start_date) params.set("start_date", filter.start_date);
+      if (filter.end_date) params.set("end_date", filter.end_date);
+      const query = params.toString();
+      const data = await api(`/api/admin/upstream/logs${query ? `?${query}` : ""}`);
+      state.logs = Array.isArray(data.items) ? data.items : [];
+    } catch (error) {
+      state.logs = [];
       toast(error.message);
     }
   } else if (state.view === "upstream") {
