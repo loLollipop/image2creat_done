@@ -564,7 +564,7 @@ function setView(view) {
 }
 
 function shouldShowHero() {
-  return state.forceHero || state.generating || state.history.length === 0;
+  return state.forceHero || state.history.length === 0;
 }
 
 function renderAll() {

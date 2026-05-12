@@ -178,7 +178,7 @@ function renderUnifiedLogs() {
   const records = state.records || [];
   const upstreamLogs = state.logs || [];
   const filter = state.logsFilter || { type: "", start_date: "", end_date: "" };
-  const panel = UPSTREAM_VIEWS.includes(state.view) ? $("#upstreamPanel") : $("#panel");
+  const panel = $("#panel") || $("#upstreamPanel");
   if (!panel) return;
 
   // Build combined timeline: generation records + upstream logs
@@ -502,67 +502,243 @@ function openEditAccountDialog(token) {
 // ===================== Register (注册机) =====================
 
 const REGISTER_MODE_LABELS = { total: "按总数", quota: "按累计配额", available: "按可用配额" };
+const MAIL_PROVIDER_TYPES = [
+  { value: "cloudflare_temp_email", label: "Cloudflare Temp Email" },
+  { value: "tempmail_lol", label: "TempMail.lol" },
+  { value: "moemail", label: "MoEmail" },
+  { value: "inbucket", label: "Inbucket" },
+  { value: "duckmail", label: "DuckMail" },
+  { value: "gptmail", label: "GPTMail" },
+  { value: "yyds_mail", label: "YYDS Mail" }
+];
+
+function getProviderDefaults(type) {
+  const defaults = {
+    cloudflare_temp_email: { api_base: "", admin_password: "", domain: [] },
+    tempmail_lol: { api_key: "", domain: [] },
+    moemail: { api_base: "", api_key: "", domain: [] },
+    inbucket: { api_base: "", domain: [], random_subdomain: true },
+    duckmail: { api_key: "", default_domain: "duckmail.sbs" },
+    gptmail: { api_key: "", default_domain: "" },
+    yyds_mail: { api_base: "https://maliapi.215.im/v1", api_key: "", domain: [], subdomain: "", wildcard: false }
+  };
+  return defaults[type] || {};
+}
+
+function renderProviderFields(provider, index, disabled) {
+  const type = String(provider.type || "tempmail_lol");
+  const domainList = Array.isArray(provider.domain) ? provider.domain.join("\n") : "";
+  let fields = "";
+
+  // API Base (cloudflare, moemail, inbucket, yyds_mail)
+  if (["cloudflare_temp_email", "moemail", "inbucket", "yyds_mail"].includes(type)) {
+    fields += `<label>API Base<input class="prov-field" data-idx="${index}" data-key="api_base" value="${escapeHtml(String(provider.api_base || ""))}" ${disabled} placeholder="https://..."></label>`;
+  }
+  // Admin Password (cloudflare)
+  if (type === "cloudflare_temp_email") {
+    fields += `<label>Admin Password<input class="prov-field" data-idx="${index}" data-key="admin_password" value="${escapeHtml(String(provider.admin_password || ""))}" ${disabled}></label>`;
+  }
+  // API Key (tempmail_lol, moemail, duckmail, gptmail, yyds_mail)
+  if (["tempmail_lol", "moemail", "duckmail", "gptmail", "yyds_mail"].includes(type)) {
+    fields += `<label>API Key<input class="prov-field" data-idx="${index}" data-key="api_key" value="${escapeHtml(String(provider.api_key || ""))}" ${disabled}></label>`;
+  }
+  // Default Domain (duckmail, gptmail)
+  if (["duckmail", "gptmail"].includes(type)) {
+    fields += `<label>Default Domain<input class="prov-field" data-idx="${index}" data-key="default_domain" value="${escapeHtml(String(provider.default_domain || ""))}" ${disabled} placeholder="${type === "duckmail" ? "duckmail.sbs" : ""}"></label>`;
+  }
+  // Subdomain + Wildcard (yyds_mail)
+  if (type === "yyds_mail") {
+    fields += `<label>Subdomain<input class="prov-field" data-idx="${index}" data-key="subdomain" value="${escapeHtml(String(provider.subdomain || ""))}" ${disabled}></label>`;
+    fields += `<label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" class="prov-check" data-idx="${index}" data-key="wildcard" ${provider.wildcard ? "checked" : ""} ${disabled}> Wildcard</label>`;
+  }
+  // Random subdomain (inbucket)
+  if (type === "inbucket") {
+    fields += `<label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" class="prov-check" data-idx="${index}" data-key="random_subdomain" ${provider.random_subdomain !== false ? "checked" : ""} ${disabled}> 随机子域名</label>`;
+  }
+  // Domain list (cloudflare, tempmail_lol, moemail, inbucket, yyds_mail)
+  if (["cloudflare_temp_email", "tempmail_lol", "moemail", "inbucket", "yyds_mail"].includes(type)) {
+    fields += `<label style="grid-column:1/-1">域名列表（每行一个）<textarea class="prov-field" data-idx="${index}" data-key="domain" rows="3" style="font-family:monospace;font-size:12px" ${disabled} placeholder="每行一个域名">${escapeHtml(domainList)}</textarea></label>`;
+  }
+  // Expiry time (moemail)
+  if (type === "moemail") {
+    fields += `<label>过期时间（秒）<input class="prov-field" data-idx="${index}" data-key="expiry_time" type="number" min="0" value="${Number(provider.expiry_time || 0)}" ${disabled}></label>`;
+  }
+  return fields;
+}
 
 function renderRegister({ preserveFocus = false } = {}) {
   const reg = state.register || {};
   const stats = reg.stats || {};
   const mail = reg.mail || {};
-  const mailJson = mail && typeof mail === "object" ? JSON.stringify(mail, null, 2) : "";
+  const providers = Array.isArray(mail.providers) ? mail.providers : [];
   const logs = Array.isArray(reg.logs) ? reg.logs : [];
   const enabled = Boolean(reg.enabled);
-  const mailFocused = preserveFocus && document.activeElement?.id === "regMail";
-  const mailSelStart = mailFocused ? document.activeElement.selectionStart : null;
-  const mailSelEnd = mailFocused ? document.activeElement.selectionEnd : null;
+  const dis = enabled ? "disabled" : "";
 
   const target = $("#upstreamPanel") || $("#panel");
   target.innerHTML = `
     <div class="card">
       <div class="upstream-header">
-        <div><h2>注册机</h2><p class="muted">chatgpt2api 自动注册流程。</p></div>
+        <div><h2>注册机</h2><p class="muted">chatgpt2api 自动注册流程。可配置多个邮箱提供商，按启用顺序轮换。</p></div>
         <div class="upstream-header-actions"><span class="status ${enabled ? "warn" : ""}">${enabled ? "运行中" : "已停止"}</span></div>
       </div>
-      <form id="regForm" class="form" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:flex-end">
-        <label>模式<select id="regMode">${Object.entries(REGISTER_MODE_LABELS).map(([v, l]) => `<option value="${v}" ${reg.mode === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-        <label>总数<input id="regTotal" type="number" min="1" value="${Number(reg.total || 10)}"></label>
-        <label>线程数<input id="regThreads" type="number" min="1" max="20" value="${Number(reg.threads || 3)}"></label>
-        <label style="grid-column:1/-1">代理<input id="regProxy" value="${escapeHtml(String(reg.proxy || ""))}" placeholder="http://user:pass@host:port"></label>
-        <label style="grid-column:1/-1">邮件提供商 JSON<textarea id="regMail" rows="5" style="font-family:monospace;font-size:12px">${escapeHtml(mailJson)}</textarea></label>
-        <div style="grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap">
+
+      <form id="regForm" class="form">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:flex-end">
+          <label>模式<select id="regMode" ${dis}>${Object.entries(REGISTER_MODE_LABELS).map(([v, l]) => `<option value="${v}" ${reg.mode === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          <label>总数<input id="regTotal" type="number" min="1" value="${Number(reg.total || 10)}" ${dis}></label>
+          <label>线程数<input id="regThreads" type="number" min="1" max="20" value="${Number(reg.threads || 3)}" ${dis}></label>
+          <label>目标额度<input id="regTargetQuota" type="number" min="1" value="${Number(reg.target_quota || 100)}" ${dis}></label>
+          <label>目标可用账号<input id="regTargetAvailable" type="number" min="1" value="${Number(reg.target_available || 10)}" ${dis}></label>
+          <label>检查间隔（秒）<input id="regCheckInterval" type="number" min="1" value="${Number(reg.check_interval || 5)}" ${dis}></label>
+          <label style="grid-column:1/-1">代理<input id="regProxy" value="${escapeHtml(String(reg.proxy || ""))}" placeholder="http://user:pass@host:port" ${dis}></label>
+        </div>
+
+        <div style="margin-top:16px;border-top:1px solid var(--border,#e2e8f0);padding-top:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <div><strong>邮箱配置</strong><span class="muted" style="margin-left:8px">可配置多个 provider，按启用顺序轮换</span></div>
+            <button class="secondary" type="button" id="regAddProvider" ${dis}>+ 添加提供商</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px">
+            <label>请求超时（秒）<input id="regMailTimeout" type="number" min="1" value="${Number(mail.request_timeout || 30)}" ${dis}></label>
+            <label>等待验证码超时<input id="regMailWaitTimeout" type="number" min="1" value="${Number(mail.wait_timeout || 30)}" ${dis}></label>
+            <label>轮询间隔（秒）<input id="regMailWaitInterval" type="number" step="0.5" min="0.5" value="${Number(mail.wait_interval || 2)}" ${dis}></label>
+          </div>
+          <div id="providersList">
+            ${providers.map((prov, idx) => `
+              <div class="provider-card" data-provider-idx="${idx}" style="border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--surface,#f8fafc)">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                  <label style="flex-direction:row;align-items:center;gap:6px;margin:0"><input type="checkbox" class="prov-enable" data-idx="${idx}" ${prov.enable !== false ? "checked" : ""} ${dis}> 启用</label>
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <span class="muted" style="font-size:12px">#${idx + 1}</span>
+                    <button class="tiny" type="button" data-delete-provider="${idx}" ${dis || providers.length <= 1 ? "disabled" : ""}>删除</button>
+                  </div>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:flex-end">
+                  <label>类型<select class="prov-type" data-idx="${idx}" ${dis}>
+                    ${MAIL_PROVIDER_TYPES.map((t) => `<option value="${t.value}" ${prov.type === t.value ? "selected" : ""}>${t.label}</option>`).join("")}
+                  </select></label>
+                  ${renderProviderFields(prov, idx, dis)}
+                </div>
+              </div>
+            `).join("")}
+            ${providers.length === 0 ? `<div class="empty" style="padding:20px;text-align:center">暂无邮箱提供商，点击「添加提供商」开始配置。</div>` : ""}
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
           <button class="primary" type="submit">保存配置</button>
           <button class="secondary" type="button" id="regStart" ${enabled ? "disabled" : ""}>启动</button>
           <button class="secondary" type="button" id="regStop" ${enabled ? "" : "disabled"}>停止</button>
           <button class="secondary" type="button" id="regReset">重置</button>
         </div>
       </form>
+
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-top:14px">
         <div class="card" style="padding:10px"><div class="muted">完成/计划</div><div style="font-size:18px;font-weight:600">${Number(stats.done||0)}/${Number(reg.total||0)}</div></div>
         <div class="card" style="padding:10px"><div class="muted">成功/失败</div><div style="font-size:18px;font-weight:600">${Number(stats.success||0)}/${Number(stats.fail||0)}</div></div>
-        <div class="card" style="padding:10px"><div class="muted">成功率</div><div style="font-size:18px;font-weight:600">${(Number(stats.success_rate||0)*100).toFixed(1)}%</div></div>
+        <div class="card" style="padding:10px"><div class="muted">成功率</div><div style="font-size:18px;font-weight:600">${Number(stats.success_rate||0).toFixed(1)}%</div></div>
+        <div class="card" style="padding:10px"><div class="muted">运行时间</div><div style="font-size:18px;font-weight:600">${Number(stats.elapsed_seconds||0)}s</div></div>
+        <div class="card" style="padding:10px"><div class="muted">平均注册</div><div style="font-size:18px;font-weight:600">${Number(stats.avg_seconds||0)}s</div></div>
+        <div class="card" style="padding:10px"><div class="muted">当前额度</div><div style="font-size:18px;font-weight:600">${Number(stats.current_quota||0)}</div></div>
+        <div class="card" style="padding:10px"><div class="muted">正常账号</div><div style="font-size:18px;font-weight:600">${Number(stats.current_available||0)}</div></div>
+        <div class="card" style="padding:10px"><div class="muted">运行线程</div><div style="font-size:18px;font-weight:600">${Number(stats.running||0)}/${Number(stats.threads||0)}</div></div>
       </div>
+
       ${logs.length ? `
         <div style="margin-top:14px">
           <strong>注册日志</strong><span class="muted"> (最近 ${logs.length} 条)</span>
-          <div class="table-wrap" style="max-height:280px;margin-top:6px">
-            <table><thead><tr><th style="width:160px">时间</th><th>消息</th></tr></thead>
-            <tbody>${logs.slice().reverse().map((e) => `<tr><td>${escapeHtml(String(e.ts||e.time||""))}</td><td>${escapeHtml(String(e.text||""))}</td></tr>`).join("")}</tbody></table>
+          <div style="max-height:280px;overflow-y:auto;margin-top:6px;border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:10px;font-family:monospace;font-size:12px;line-height:1.8;background:var(--surface,#f8fafc)">
+            ${logs.slice().reverse().map((e) => {
+              const lvl = String(e.level || "");
+              const cls = lvl === "red" ? "color:#e11d48" : lvl === "green" ? "color:#059669" : lvl === "yellow" ? "color:#d97706" : "color:var(--text-muted,#64748b)";
+              return `<div style="${cls}"><span style="color:var(--text-muted,#94a3b8)">${escapeHtml(String(e.time || e.ts || "").replace(/T/, " ").slice(0, 19))}</span> ${escapeHtml(String(e.text || ""))}</div>`;
+            }).join("")}
           </div>
         </div>
       ` : ""}
     </div>
   `;
-  if (mailFocused) { const ta = $("#regMail"); if (ta) { ta.focus(); if (mailSelStart != null) ta.setSelectionRange(mailSelStart, mailSelEnd); } }
+
+  // Event bindings
   $("#regForm").addEventListener("submit", saveRegisterConfig);
   $("#regStart").addEventListener("click", () => registerLifecycle("start"));
   $("#regStop").addEventListener("click", () => registerLifecycle("stop"));
   $("#regReset").addEventListener("click", () => registerLifecycle("reset"));
+  $("#regAddProvider")?.addEventListener("click", () => {
+    const reg = state.register || {};
+    const mail = reg.mail || {};
+    const providers = Array.isArray(mail.providers) ? [...mail.providers] : [];
+    providers.push({ type: "tempmail_lol", enable: true, ...getProviderDefaults("tempmail_lol") });
+    if (!state.register) state.register = {};
+    if (!state.register.mail) state.register.mail = {};
+    state.register.mail.providers = providers;
+    renderRegister();
+  });
+  $$("[data-delete-provider]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.dataset.deleteProvider);
+      const providers = [...(state.register?.mail?.providers || [])];
+      providers.splice(idx, 1);
+      state.register.mail.providers = providers;
+      renderRegister();
+    });
+  });
+  $$(".prov-type").forEach((sel) => {
+    sel.addEventListener("change", () => {
+      const idx = Number(sel.dataset.idx);
+      const providers = [...(state.register?.mail?.providers || [])];
+      const oldProv = providers[idx] || {};
+      providers[idx] = { type: sel.value, enable: oldProv.enable !== false, ...getProviderDefaults(sel.value) };
+      state.register.mail.providers = providers;
+      renderRegister();
+    });
+  });
+}
+
+function collectRegisterMailConfig() {
+  const providers = [];
+  $$(".provider-card").forEach((card) => {
+    const idx = Number(card.dataset.providerIdx);
+    const enableBox = $(`.prov-enable[data-idx="${idx}"]`, card);
+    const typeSelect = $(`.prov-type[data-idx="${idx}"]`, card);
+    const prov = { type: typeSelect?.value || "tempmail_lol", enable: enableBox?.checked !== false };
+    $$(".prov-field", card).forEach((field) => {
+      const key = field.dataset.key;
+      if (key === "domain") {
+        prov[key] = field.value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+      } else if (key === "expiry_time") {
+        prov[key] = Number(field.value || 0);
+      } else {
+        prov[key] = field.value;
+      }
+    });
+    $$(".prov-check", card).forEach((check) => {
+      prov[check.dataset.key] = check.checked;
+    });
+    providers.push(prov);
+  });
+  return {
+    request_timeout: Number($("#regMailTimeout")?.value || 30),
+    wait_timeout: Number($("#regMailWaitTimeout")?.value || 30),
+    wait_interval: Number($("#regMailWaitInterval")?.value || 2),
+    providers
+  };
 }
 
 async function saveRegisterConfig(event) {
   event.preventDefault();
-  let mailJson;
-  try { const raw = $("#regMail").value.trim(); mailJson = raw ? JSON.parse(raw) : {}; }
-  catch (error) { toast(`JSON 解析失败：${error.message}`); return; }
-  const payload = { mode: $("#regMode").value, total: Number($("#regTotal").value||0), threads: Number($("#regThreads").value||0), proxy: $("#regProxy").value.trim(), mail: mailJson };
+  const mail = collectRegisterMailConfig();
+  const payload = {
+    mode: $("#regMode").value,
+    total: Number($("#regTotal").value || 0),
+    threads: Number($("#regThreads").value || 0),
+    proxy: $("#regProxy").value.trim(),
+    target_quota: Number($("#regTargetQuota")?.value || 100),
+    target_available: Number($("#regTargetAvailable")?.value || 10),
+    check_interval: Number($("#regCheckInterval")?.value || 5),
+    mail
+  };
   try {
     const data = await api("/api/admin/upstream/register", { method: "POST", body: JSON.stringify(payload) });
     state.register = data.register || null;
