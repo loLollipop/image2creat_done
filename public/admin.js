@@ -8,6 +8,7 @@ const state = {
   settings: null,
   users: [],
   records: [],
+  generations: [],
   redeemCodes: [],
   redeemFilter: "",
   transactions: [],
@@ -31,7 +32,14 @@ const state = {
   registerLogsCollapsed: false,
   lastBatch: null,
   showAdvancedSettings: false,
-  showUpstreamTabs: false
+  showUpstreamTabs: false,
+  upstreamConfig: null,
+  upstreamConfigError: "",
+  upstreamStorage: null,
+  backups: [],
+  backupState: null,
+  backupSettings: null,
+  backupsError: ""
 };
 
 let registerPollTimer = null;
@@ -114,7 +122,7 @@ function renderDenied() {
 
 // ===================== Main Admin Layout =====================
 
-const UPSTREAM_VIEWS = ["accounts", "register", "settings", "logs"];
+const UPSTREAM_VIEWS = ["accounts", "register", "upstream_settings", "logs", "backups", "settings"];
 
 function renderAdmin() {
   $("#logoutBtn").classList.remove("hidden");
@@ -125,17 +133,21 @@ function renderAdmin() {
       <p>管理用户、积分、接口，查看生图日志。</p>
     </section>
     <div class="tabs">
+      <button class="secondary ${state.view === "generations" ? "active" : ""}" data-view="generations">生图记录</button>
       <button class="secondary ${state.view === "users" ? "active" : ""}" data-view="users">用户管理</button>
       <button class="secondary ${state.view === "redeem" ? "active" : ""}" data-view="redeem">卡密管理</button>
       <button class="secondary ${state.view === "transactions" ? "active" : ""}" data-view="transactions">积分流水</button>
+      <button class="secondary ${state.view === "payments" ? "active" : ""}" data-view="payments">支付订单</button>
       <button class="secondary ${isUpstreamView ? "active" : ""}" data-view="upstream">上游管理</button>
     </div>
     ${isUpstreamView ? `
       <div class="sub-tabs">
         <button class="secondary ${state.view === "accounts" ? "active" : ""}" data-view="accounts">号池</button>
-        <button class="secondary ${state.view === "register" ? "active" : ""}" data-view="register">注册机</button>
-        <button class="secondary ${state.view === "settings" ? "active" : ""}" data-view="settings">接口设置</button>
         <button class="secondary ${state.view === "logs" ? "active" : ""}" data-view="logs">调用日志</button>
+        <button class="secondary ${state.view === "register" ? "active" : ""}" data-view="register">注册机</button>
+        <button class="secondary ${state.view === "upstream_settings" ? "active" : ""}" data-view="upstream_settings">上游设置</button>
+        <button class="secondary ${state.view === "backups" ? "active" : ""}" data-view="backups">备份</button>
+        <button class="secondary ${state.view === "settings" ? "active" : ""}" data-view="settings">接口设置</button>
       </div>
     ` : ""}
     <section id="panel"></section>
@@ -258,6 +270,7 @@ function renderRegisterLogsBlock(reg) {
 }
 
 function renderPanel() {
+  if (state.view === "generations") return renderGenerations();
   if (state.view === "logs") return renderUnifiedLogs();
   if (state.view === "users") return renderUsers();
   if (state.view === "redeem") return renderRedeem();
@@ -265,6 +278,8 @@ function renderPanel() {
   if (state.view === "payments") return renderPayments();
   if (state.view === "accounts") return renderAccounts();
   if (state.view === "register") return renderRegister();
+  if (state.view === "upstream_settings") return renderUpstreamSettings();
+  if (state.view === "backups") return renderBackups();
   renderSettings();
 }
 
@@ -283,8 +298,9 @@ function renderUnifiedLogs() {
     <div class="card">
       <div class="upstream-header">
         <div>
-          <h2>上游调用日志</h2>
-          <p class="muted">仅展示上游 chatgpt2api 的调用日志。可按日期筛选，点击「详情」查看 payload，并支持删除所选日志。</p>
+          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Logs</div>
+          <h2>日志管理</h2>
+          <p class="muted">查看上游 chatgpt2api 的调用与账号管理日志。可按类型、日期筛选，支持批量删除。</p>
         </div>
         <div class="upstream-header-actions">
           <button class="secondary" type="button" id="logsRefreshBtn">刷新</button>
@@ -292,14 +308,20 @@ function renderUnifiedLogs() {
         </div>
       </div>
       <form id="logsFilterForm" class="form" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px">
+        <label style="flex:0 0 150px">日志类型
+          <select id="logsTypeInput">
+            <option value="call" ${(filter.type || "call") === "call" ? "selected" : ""}>调用日志</option>
+            <option value="account" ${filter.type === "account" ? "selected" : ""}>账号管理日志</option>
+          </select>
+        </label>
         <label style="flex:1 1 160px">起始日期
           <input id="logsStartDateInput" type="date" value="${escapeHtml(filter.start_date || "")}">
         </label>
         <label style="flex:1 1 160px">结束日期
           <input id="logsEndDateInput" type="date" value="${escapeHtml(filter.end_date || "")}">
         </label>
-        <button class="primary" type="submit">筛选</button>
-        <button class="secondary" type="button" id="logsResetBtn">重置</button>
+        <button class="secondary" type="button" id="logsResetBtn">清除筛选</button>
+        <button class="primary" type="submit">查询</button>
       </form>
       <div class="table-wrap">
         ${upstreamLogs.length ? `
@@ -330,7 +352,7 @@ function renderUnifiedLogs() {
   $("#logsFilterForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     state.logsFilter = {
-      type: "",
+      type: $("#logsTypeInput")?.value || "call",
       start_date: $("#logsStartDateInput").value || "",
       end_date: $("#logsEndDateInput").value || ""
     };
@@ -340,7 +362,7 @@ function renderUnifiedLogs() {
     renderUnifiedLogs();
   });
   $("#logsResetBtn").addEventListener("click", async () => {
-    state.logsFilter = { type: "", start_date: "", end_date: "" };
+    state.logsFilter = { type: "call", start_date: "", end_date: "" };
     state.logsExpanded = new Set();
     state.logsSelected = new Set();
     await loadPanel();
@@ -687,8 +709,9 @@ function renderAccounts() {
     <div class="card account-card">
       <div class="upstream-header">
         <div>
-          <h2>号池</h2>
-          <p class="muted">管理 chatgpt2api 的 ChatGPT 账号池，支持筛选、批量刷新、导出 Token、移除异常账号。</p>
+          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Account Pool</div>
+          <h2>号池管理</h2>
+          <p class="muted">管理 ChatGPT 账号池，支持筛选、批量刷新、导出 Token、移除异常账号。</p>
         </div>
         <div class="upstream-header-actions">
           <button class="secondary" type="button" id="acctRefreshAllBtn">一键刷新所有</button>
@@ -952,7 +975,11 @@ function renderRegister() {
   target.innerHTML = `
     <div class="card">
       <div class="upstream-header">
-        <div><h2>注册机</h2><p class="muted">chatgpt2api 自动注册流程。可配置多个邮箱提供商，按启用顺序轮换。</p></div>
+        <div>
+          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Register</div>
+          <h2>ChatGPT 注册机</h2>
+          <p class="muted">自动注册流程。可配置多个邮箱提供商，按启用顺序轮换。</p>
+        </div>
         <div class="upstream-header-actions"><span id="regStatusBadge" class="status ${enabled ? "warn" : ""}">${enabled ? "运行中" : "已停止"}</span></div>
       </div>
 
@@ -1336,6 +1363,438 @@ function renderPayments() {
   `;
 }
 
+// ===================== Generations (生图记录) =====================
+
+function renderGenerations() {
+  const records = state.generations || [];
+  const panel = $("#panel");
+  if (!panel) return;
+  panel.innerHTML = `
+    <div class="card">
+      <h2>生图记录</h2>
+      <p class="muted">管理员可查看所有用户的生成记录，包括提示词、用户、IP、浏览器信息和错误信息。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>时间</th><th>用户</th><th>提示词</th><th>模型</th><th>尺寸</th><th>状态</th><th>上游</th><th>IP</th><th>预览</th>
+          </tr></thead>
+          <tbody>
+            ${records.length ? records.map((r) => `
+              <tr>
+                <td class="muted" style="white-space:nowrap">${fmt(r.createdAt)}</td>
+                <td>${escapeHtml(r.userName || r.userEmail || r.userId || "")}</td>
+                <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(r.prompt || "")}">${escapeHtml((r.prompt || "").slice(0, 80))}</td>
+                <td>${escapeHtml(r.model || "")}</td>
+                <td>${escapeHtml(r.size || "")}</td>
+                <td><span class="status ${r.status === "completed" ? "ok" : r.status === "failed" ? "failed" : ""}">${escapeHtml(r.status || "")}</span></td>
+                <td>${escapeHtml(r.upstream || "")}</td>
+                <td class="muted" style="font-size:11px">${escapeHtml(r.ip || "")}</td>
+                <td>${r.imageUrl ? `<a href="${escapeHtml(r.imageUrl)}" target="_blank" style="font-size:12px">查看</a>` : ""}</td>
+              </tr>
+            `).join("") : `<tr><td colspan="9" class="empty">暂无生图记录</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// ===================== Upstream Settings (上游设置) =====================
+
+const LOG_LEVEL_OPTIONS = ["debug", "info", "warning", "error"];
+
+function renderUpstreamSettings() {
+  const target = $("#upstreamPanel") || $("#panel");
+  if (!target) return;
+  const cfg = state.upstreamConfig?.config || state.upstreamConfig || {};
+  const storage = state.upstreamStorage;
+
+  if (state.upstreamConfigError) {
+    target.innerHTML = `<div class="card"><div class="upstream-header"><div><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Settings</div><h2>上游设置</h2><p class="muted">管理 chatgpt2api 运行参数。</p></div></div><div class="empty" style="color:#e11d48">${escapeHtml(state.upstreamConfigError)}</div></div>`;
+    return;
+  }
+
+  const logLevels = Array.isArray(cfg.log_levels) ? cfg.log_levels : [];
+  const sensitiveWords = Array.isArray(cfg.sensitive_words) ? cfg.sensitive_words.join("\n") : "";
+  const aiReview = cfg.ai_review || {};
+
+  target.innerHTML = `
+    <div class="card">
+      <div class="upstream-header">
+        <div>
+          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Settings</div>
+          <h2>上游设置</h2>
+          <p class="muted">管理 chatgpt2api 运行参数、代理、日志级别、敏感词和 AI 审核。</p>
+        </div>
+        <div class="upstream-header-actions"><button class="primary" type="button" id="upstreamSaveBtn">保存配置</button></div>
+      </div>
+
+      <form id="upstreamConfigForm" class="form">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
+          <label>账号刷新间隔（分钟）
+            <input id="ucfg_refresh_interval" type="number" min="1" value="${Number(cfg.refresh_account_interval_minute || 5)}" placeholder="5">
+            <span class="muted" style="font-size:11px">控制账号自动刷新频率。</span>
+          </label>
+          <div>
+            <label>全局代理
+              <input id="ucfg_proxy" value="${escapeHtml(String(cfg.proxy || ""))}" placeholder="http://127.0.0.1:7890">
+              <span class="muted" style="font-size:11px">留空表示不使用代理。</span>
+            </label>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+              <button class="secondary" type="button" id="proxyTestBtn" style="white-space:nowrap">测试代理</button>
+              <span id="proxyTestResult" class="muted" style="font-size:12px"></span>
+            </div>
+          </div>
+          <label>图片访问地址
+            <input id="ucfg_base_url" value="${escapeHtml(String(cfg.base_url || ""))}" placeholder="https://example.com">
+            <span class="muted" style="font-size:11px">图片结果的访问前缀地址。</span>
+          </label>
+          <label>图片自动清理（天）
+            <input id="ucfg_image_retention" type="number" min="1" value="${Number(cfg.image_retention_days || 30)}" placeholder="30">
+            <span class="muted" style="font-size:11px">自动删除多少天前的本地图片。</span>
+          </label>
+          <label>图片轮询超时（秒）
+            <input id="ucfg_poll_timeout" type="number" min="1" value="${Number(cfg.image_poll_timeout_secs || 120)}" placeholder="120">
+            <span class="muted" style="font-size:11px">等待上游图片结果的最长时间。</span>
+          </label>
+          <label>单账号图片并发
+            <input id="ucfg_account_concurrency" type="number" min="1" value="${Number(cfg.image_account_concurrency || 3)}" placeholder="3">
+            <span class="muted" style="font-size:11px">每个账号同时处理的图片请求数量。</span>
+          </label>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px">
+          <label style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="ucfg_auto_remove_invalid" ${cfg.auto_remove_invalid_accounts ? "checked" : ""}> 自动移除异常账号
+          </label>
+          <label style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="ucfg_auto_remove_limited" ${cfg.auto_remove_rate_limited_accounts ? "checked" : ""}> 自动移除限流账号
+          </label>
+        </div>
+
+        <div style="margin-top:16px;border-top:1px solid var(--border,#e2e8f0);padding-top:14px">
+          <div style="margin-bottom:8px"><strong>控制台日志级别</strong><span class="muted" style="margin-left:8px;font-size:12px">不选择时使用默认 info / warning / error。</span></div>
+          <div style="display:flex;gap:14px;flex-wrap:wrap">
+            ${LOG_LEVEL_OPTIONS.map((level) => `<label style="flex-direction:row;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" class="ucfg-log-level" data-level="${level}" ${logLevels.includes(level) ? "checked" : ""}> ${level}</label>`).join("")}
+          </div>
+        </div>
+
+        <div style="margin-top:14px">
+          <label>全局附加指令
+            <textarea id="ucfg_system_prompt" rows="3" style="font-family:monospace;font-size:12px;resize:vertical" placeholder="每次请求都会作为 system 消息注入">${escapeHtml(String(cfg.global_system_prompt || ""))}</textarea>
+            <span class="muted" style="font-size:11px">可用于审核用户提示词、统一约束模型行为或固定角色设定。</span>
+          </label>
+        </div>
+
+        <div style="margin-top:14px">
+          <label>敏感词（每行一个）
+            <textarea id="ucfg_sensitive_words" rows="3" style="font-family:monospace;font-size:12px;resize:vertical" placeholder="一行一个，命中即拒绝">${escapeHtml(sensitiveWords)}</textarea>
+            <span class="muted" style="font-size:11px">只要用户请求包含任意敏感词就直接拒绝。</span>
+          </label>
+        </div>
+
+        <div style="margin-top:16px;border-top:1px solid var(--border,#e2e8f0);padding-top:14px">
+          <div style="margin-bottom:10px">
+            <label style="flex-direction:row;align-items:center;gap:8px;cursor:pointer;font-weight:600">
+              <input type="checkbox" id="ucfg_ai_review_enabled" ${aiReview.enabled ? "checked" : ""}> 启用 AI 审核
+            </label>
+            <p class="muted" style="font-size:12px;margin-top:4px">开启后会在请求进入生图账号前先调用审核模型，审核不通过会直接拒绝。</p>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
+            <label>Base URL<input id="ucfg_ai_review_base_url" value="${escapeHtml(String(aiReview.base_url || ""))}" placeholder="https://api.openai.com"></label>
+            <label>API Key<input id="ucfg_ai_review_api_key" value="${escapeHtml(String(aiReview.api_key || ""))}" placeholder="sk-..."></label>
+            <label>Model<input id="ucfg_ai_review_model" value="${escapeHtml(String(aiReview.model || ""))}" placeholder="gpt-4o-mini"></label>
+          </div>
+          <div style="margin-top:10px">
+            <label>审核提示词<textarea id="ucfg_ai_review_prompt" rows="2" style="font-family:monospace;font-size:12px;resize:vertical" placeholder="判断用户请求是否允许。只回答 ALLOW 或 REJECT。">${escapeHtml(String(aiReview.prompt || ""))}</textarea></label>
+          </div>
+        </div>
+      </form>
+
+      ${storage ? `
+        <div style="margin-top:20px;border-top:1px solid var(--border,#e2e8f0);padding-top:14px">
+          <h3>存储信息</h3>
+          <pre style="background:var(--surface,#f8fafc);padding:12px;border-radius:8px;font-size:12px;overflow-x:auto">${escapeHtml(JSON.stringify(storage, null, 2))}</pre>
+        </div>
+      ` : ""}
+    </div>
+  `;
+
+  $("#upstreamSaveBtn")?.addEventListener("click", saveUpstreamConfig);
+  $("#proxyTestBtn")?.addEventListener("click", testUpstreamProxy);
+}
+
+function collectUpstreamConfig() {
+  const cfg = state.upstreamConfig?.config || state.upstreamConfig || {};
+  const updated = { ...cfg };
+  updated.refresh_account_interval_minute = Number($("#ucfg_refresh_interval")?.value) || 5;
+  updated.proxy = ($("#ucfg_proxy")?.value || "").trim();
+  updated.base_url = ($("#ucfg_base_url")?.value || "").trim();
+  updated.image_retention_days = Number($("#ucfg_image_retention")?.value) || 30;
+  updated.image_poll_timeout_secs = Number($("#ucfg_poll_timeout")?.value) || 120;
+  updated.image_account_concurrency = Number($("#ucfg_account_concurrency")?.value) || 3;
+  updated.auto_remove_invalid_accounts = !!$("#ucfg_auto_remove_invalid")?.checked;
+  updated.auto_remove_rate_limited_accounts = !!$("#ucfg_auto_remove_limited")?.checked;
+
+  const logLevels = [];
+  $$(".ucfg-log-level").forEach((cb) => { if (cb.checked) logLevels.push(cb.dataset.level); });
+  updated.log_levels = logLevels;
+
+  updated.global_system_prompt = ($("#ucfg_system_prompt")?.value || "").trim();
+  const wordsRaw = ($("#ucfg_sensitive_words")?.value || "").trim();
+  updated.sensitive_words = wordsRaw ? wordsRaw.split("\n").map((w) => w.trim()).filter(Boolean) : [];
+
+  updated.ai_review = {
+    enabled: !!$("#ucfg_ai_review_enabled")?.checked,
+    base_url: ($("#ucfg_ai_review_base_url")?.value || "").trim(),
+    api_key: ($("#ucfg_ai_review_api_key")?.value || "").trim(),
+    model: ($("#ucfg_ai_review_model")?.value || "").trim(),
+    prompt: ($("#ucfg_ai_review_prompt")?.value || "").trim()
+  };
+  return updated;
+}
+
+async function saveUpstreamConfig() {
+  try {
+    const body = collectUpstreamConfig();
+    const data = await api("/api/admin/upstream/settings", { method: "POST", body: JSON.stringify(body) });
+    state.upstreamConfig = data;
+    toast("上游配置已保存");
+    renderUpstreamSettings();
+  } catch (error) { toast(error.message); }
+}
+
+async function testUpstreamProxy() {
+  const resultEl = $("#proxyTestResult");
+  if (resultEl) resultEl.textContent = "测试中…";
+  try {
+    const proxy = ($("#ucfg_proxy")?.value || "").trim();
+    const data = await api("/api/admin/upstream/proxy/test", { method: "POST", body: JSON.stringify({ url: proxy }) });
+    const r = data.result || data;
+    if (resultEl) {
+      if (r.ok) {
+        resultEl.textContent = `代理可用：HTTP ${r.status}，用时 ${r.latency_ms} ms`;
+        resultEl.style.color = "#059669";
+      } else {
+        resultEl.textContent = `代理不可用：${r.error || "未知错误"}`;
+        resultEl.style.color = "#e11d48";
+      }
+    }
+  } catch (error) { if (resultEl) { resultEl.textContent = `测试失败: ${error.message}`; resultEl.style.color = "#e11d48"; } }
+}
+
+// ===================== Backups (备份) =====================
+
+const BACKUP_INCLUDE_LABELS = [
+  { key: "config", label: "系统配置" },
+  { key: "register", label: "注册配置" },
+  { key: "logs", label: "调度与调用日志" },
+  { key: "accounts_snapshot", label: "账号快照" },
+  { key: "images", label: "图片文件目录" }
+];
+
+function formatBytes(value) {
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = value, idx = 0;
+  while (size >= 1024 && idx < units.length - 1) { size /= 1024; idx++; }
+  return `${size >= 10 || idx === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[idx]}`;
+}
+
+function renderBackups() {
+  const target = $("#upstreamPanel") || $("#panel");
+  if (!target) return;
+  const backups = state.backups || [];
+  const bs = state.backupState || {};
+  const settings = state.backupSettings || {};
+  const include = settings.include || {};
+  const statusLabel = bs.running ? "备份中" : bs.last_status === "success" ? "最近成功" : bs.last_status === "error" ? "最近失败" : "未执行";
+  const statusClass = bs.running ? "warn" : bs.last_status === "success" ? "ok" : bs.last_status === "error" ? "failed" : "";
+
+  target.innerHTML = `
+    <div class="card">
+      <div class="upstream-header">
+        <div>
+          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Backup</div>
+          <h2>R2 备份管理</h2>
+          <p class="muted">将关键数据定时备份到 Cloudflare R2，支持可选加密、轮替、手动执行与历史清理。</p>
+        </div>
+        <div class="upstream-header-actions">
+          <span class="status ${statusClass}">${statusLabel}</span>
+        </div>
+      </div>
+      ${state.backupsError ? `<div class="empty" style="color:#e11d48">${escapeHtml(state.backupsError)}</div>` : ""}
+
+      <div style="background:var(--surface,#f8fafc);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:12px;margin-bottom:16px;font-size:13px;color:#57534e">
+        账号与用户密钥会从当前存储后端导出逻辑快照，不依赖底层是 json、sqlite、postgres 还是 git。图片目录默认不备份，避免备份体积过大。
+      </div>
+
+      <form id="backupSettingsForm" class="form">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
+          <label style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="bk_enabled" ${settings.enabled ? "checked" : ""}> 启用定时备份
+          </label>
+          <label style="flex-direction:row;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="bk_encrypt" ${settings.encrypt ? "checked" : ""}> 启用备份加密
+          </label>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px">
+          <label>Cloudflare Account ID<input id="bk_account_id" value="${escapeHtml(String(settings.account_id || ""))}"></label>
+          <label>Bucket 名称<input id="bk_bucket" value="${escapeHtml(String(settings.bucket || ""))}"></label>
+          <label>Access Key ID<input id="bk_access_key_id" value="${escapeHtml(String(settings.access_key_id || ""))}"></label>
+          <label>Secret Access Key<input id="bk_secret_access_key" type="password" value="${escapeHtml(String(settings.secret_access_key || ""))}"></label>
+          <label>备份前缀<input id="bk_prefix" value="${escapeHtml(String(settings.prefix || ""))}" placeholder="backups"><span class="muted" style="font-size:11px">R2 内对象前缀，例如 backups/prod。</span></label>
+          <label>定时备份间隔（分钟）<input id="bk_interval" type="number" min="1" value="${Number(settings.interval_minutes || 360)}" placeholder="360"><span class="muted" style="font-size:11px">服务启动后会按此间隔自动执行。</span></label>
+          <label>保留备份数量<input id="bk_rotation" type="number" min="0" value="${Number(settings.rotation_keep || 10)}" placeholder="10"><span class="muted" style="font-size:11px">成功上传后自动删除更旧的备份。0 = 不轮替。</span></label>
+          <label>加密口令<input id="bk_passphrase" type="password" value="${escapeHtml(String(settings.passphrase || ""))}" placeholder="${settings.encrypt ? "启用加密后必填" : "留空"}"><span class="muted" style="font-size:11px">请妥善保管，否则无法解密备份内容。</span></label>
+        </div>
+
+        <div style="margin-top:16px;border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:14px">
+          <div style="margin-bottom:8px"><strong>备份内容</strong><span class="muted" style="margin-left:8px;font-size:12px">按组件勾选需要进入备份包的数据。</span></div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px">
+            ${BACKUP_INCLUDE_LABELS.map((it) => `<label style="flex-direction:row;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" class="bk-include" data-key="${it.key}" ${include[it.key] !== false ? "checked" : ""}> ${it.label}</label>`).join("")}
+          </div>
+        </div>
+      </form>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:16px;background:var(--surface,#f8fafc);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:14px;font-size:13px">
+        <div><div class="muted" style="font-size:11px">最近开始</div><div style="margin-top:4px;font-weight:500">${fmt(bs.last_started_at) || "—"}</div></div>
+        <div><div class="muted" style="font-size:11px">最近完成</div><div style="margin-top:4px;font-weight:500">${fmt(bs.last_finished_at) || "—"}</div></div>
+        <div><div class="muted" style="font-size:11px">最近对象</div><div style="margin-top:4px;font-weight:500;word-break:break-all">${escapeHtml(bs.last_object_key || "—")}</div></div>
+        ${bs.last_error ? `<div style="grid-column:1/-1"><div class="muted" style="font-size:11px;color:#e11d48">最近错误</div><div style="margin-top:4px;padding:8px;background:#fff1f2;border:1px solid #fecdd3;border-radius:6px;color:#be123c;word-break:break-all">${escapeHtml(bs.last_error)}</div></div>` : ""}
+      </div>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;justify-content:flex-end">
+        <button class="secondary" type="button" id="backupTestBtn">测试连接</button>
+        <button class="secondary" type="button" id="backupRefreshBtn">刷新列表</button>
+        <button class="secondary" type="button" id="backupRunBtn" ${bs.running ? "disabled" : ""}>${bs.running ? "备份中…" : "立即备份"}</button>
+        <button class="primary" type="button" id="backupSaveBtn">保存配置</button>
+      </div>
+      <div id="backupTestResult" class="muted" style="margin-top:8px;text-align:right"></div>
+
+      <div style="margin-top:20px;border-top:1px solid var(--border,#e2e8f0);padding-top:14px">
+        <div style="margin-bottom:10px"><strong>历史备份</strong><span class="muted" style="margin-left:8px;font-size:12px">支持查看对象信息并直接删除远端备份。</span></div>
+        ${backups.length === 0 ? `<div class="empty">暂无远端备份记录。保存配置并执行一次手动备份后会出现在这里。</div>` : `
+          <div style="display:flex;flex-direction:column;gap:10px">
+            ${backups.map((b) => `
+              <div class="backup-item" style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:12px;background:#fff">
+                <div style="min-width:0;flex:1">
+                  <div style="font-weight:500;word-break:break-all">${escapeHtml(b.name || b.key || "")}${b.encrypted ? ` <span class="status muted" style="font-size:11px">已加密</span>` : ""}</div>
+                  <div class="muted" style="font-size:12px;margin-top:4px">大小 ${formatBytes(b.size || 0)} · 更新时间 ${fmt(b.updated_at || b.created_at || b.createdAt || b.timestamp)} · key ${escapeHtml(b.key || "")}</div>
+                </div>
+                <div style="display:flex;gap:6px">
+                  <button class="tiny secondary" data-backup-download="${escapeHtml(b.key || b.name || "")}">下载</button>
+                  <button class="tiny secondary" data-backup-detail="${escapeHtml(b.key || b.name || "")}">查看详情</button>
+                  <button class="tiny" style="color:#e11d48" data-backup-delete="${escapeHtml(b.key || b.name || "")}">删除</button>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+
+  $("#backupRunBtn")?.addEventListener("click", runBackup);
+  $("#backupTestBtn")?.addEventListener("click", testBackupConnection);
+  $("#backupRefreshBtn")?.addEventListener("click", async () => {
+    try { await loadPanel(); renderBackups(); toast("已刷新"); } catch (e) { toast(e.message); }
+  });
+  $("#backupSaveBtn")?.addEventListener("click", saveBackupSettings);
+  target.querySelectorAll("[data-backup-delete]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteBackup(btn.dataset.backupDelete));
+  });
+  target.querySelectorAll("[data-backup-detail]").forEach((btn) => {
+    btn.addEventListener("click", () => showBackupDetail(btn.dataset.backupDetail));
+  });
+  target.querySelectorAll("[data-backup-download]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      window.open(`/api/admin/upstream/backups/download?key=${encodeURIComponent(btn.dataset.backupDownload)}`, "_blank");
+    });
+  });
+}
+
+async function saveBackupSettings() {
+  try {
+    const body = {};
+    body.enabled = !!$("#bk_enabled")?.checked;
+    body.encrypt = !!$("#bk_encrypt")?.checked;
+    body.account_id = ($("#bk_account_id")?.value || "").trim();
+    body.bucket = ($("#bk_bucket")?.value || "").trim();
+    body.access_key_id = ($("#bk_access_key_id")?.value || "").trim();
+    body.secret_access_key = ($("#bk_secret_access_key")?.value || "").trim();
+    body.prefix = ($("#bk_prefix")?.value || "").trim();
+    body.interval_minutes = Number($("#bk_interval")?.value) || 360;
+    body.rotation_keep = Number($("#bk_rotation")?.value) || 10;
+    body.passphrase = ($("#bk_passphrase")?.value || "").trim();
+    const include = {};
+    $$(".bk-include").forEach((cb) => { include[cb.dataset.key] = cb.checked; });
+    body.include = include;
+    await api("/api/admin/upstream/backups/settings", { method: "POST", body: JSON.stringify(body) });
+    toast("备份配置已保存");
+    await loadPanel();
+    renderBackups();
+  } catch (error) { toast(error.message); }
+}
+
+async function runBackup() {
+  try {
+    await api("/api/admin/upstream/backups/run", { method: "POST" });
+    toast("备份任务已启动");
+    await loadPanel();
+    renderBackups();
+  } catch (error) { toast(error.message); }
+}
+
+async function testBackupConnection() {
+  const resultEl = $("#backupTestResult");
+  if (resultEl) resultEl.textContent = "测试中…";
+  try {
+    const data = await api("/api/admin/upstream/backups/test", { method: "POST" });
+    const r = data.result || data;
+    if (resultEl) {
+      if (r.ok) {
+        resultEl.textContent = `连接正常：${r.message || "成功"}`;
+        resultEl.style.color = "#059669";
+      } else {
+        resultEl.textContent = `连接失败：${r.error || "未知错误"}`;
+        resultEl.style.color = "#e11d48";
+      }
+    }
+  } catch (error) {
+    if (resultEl) { resultEl.textContent = `测试失败: ${error.message}`; resultEl.style.color = "#e11d48"; }
+  }
+}
+
+async function deleteBackup(key) {
+  if (!confirm(`确定要删除备份 ${key} 吗？`)) return;
+  try {
+    await api("/api/admin/upstream/backups/delete", { method: "POST", body: JSON.stringify({ key }) });
+    toast("备份已删除");
+    await loadPanel();
+    renderBackups();
+  } catch (error) { toast(error.message); }
+}
+
+async function showBackupDetail(key) {
+  try {
+    const data = await api(`/api/admin/upstream/backups/detail?key=${encodeURIComponent(key)}`);
+    const d = data.item || data;
+    const lines = [];
+    if (d.name) lines.push(`对象名称: ${d.name}`);
+    if (d.created_at) lines.push(`创建时间: ${d.created_at}`);
+    if (d.trigger) lines.push(`触发方式: ${d.trigger}`);
+    if (d.app_version) lines.push(`应用版本: ${d.app_version}`);
+    if (d.storage_backend) lines.push(`存储后端: ${d.storage_backend}`);
+    if (d.size) lines.push(`大小: ${formatBytes(d.size)}`);
+    if (d.encrypted !== undefined) lines.push(`已加密: ${d.encrypted ? "是" : "否"}`);
+    if (d.contents) lines.push(`\n包含内容:\n${JSON.stringify(d.contents, null, 2)}`);
+    alert(lines.join("\n") || JSON.stringify(d, null, 2));
+  } catch (error) { toast(error.message); }
+}
+
+
+
 // ===================== Settings (simplified) =====================
 
 function renderSettings() {
@@ -1419,7 +1878,12 @@ function renderSettings() {
 // ===================== Data loading =====================
 
 async function loadPanel() {
-  if (state.view === "logs") {
+  if (state.view === "generations") {
+    try {
+      const data = await api("/api/admin/generations");
+      state.generations = data.records || [];
+    } catch (error) { state.generations = []; toast(error.message); }
+  } else if (state.view === "logs") {
     try {
       const params = new URLSearchParams();
       const filter = state.logsFilter || {};
@@ -1431,10 +1895,6 @@ async function loadPanel() {
       state.logs = Array.isArray(logsData.items) ? logsData.items : [];
       state.logsError = "";
     } catch (error) {
-      // Surface the real upstream error instead of silently showing an empty
-      // table — typical failure is `Upstream (chatgpt2api) is not configured`
-      // (503) or a bad CHATGPT2API_AUTH_KEY (401). Without this the admin
-      // just sees "暂无记录" with no diagnostic.
       state.logs = [];
       state.logsError = String(error?.message || error || "上游调用日志加载失败");
       toast(state.logsError);
@@ -1461,13 +1921,35 @@ async function loadPanel() {
     try {
       const data = await api("/api/admin/upstream/register");
       state.register = data.register || null;
-      // Only poll when the register loop is actually running. Polling while
-      // stopped would replace the form's stats / logs sections every 2s with
-      // identical data and was previously also clobbering admin-edited form
-      // inputs (the function ignored its preserveFocus flag).
       if (state.register?.enabled) startRegisterPolling();
       else stopRegisterPolling();
     } catch (error) { state.register = null; toast(error.message); }
+  } else if (state.view === "upstream_settings") {
+    try {
+      const [configData, storageData] = await Promise.all([
+        api("/api/admin/upstream/settings"),
+        api("/api/admin/upstream/storage").catch(() => null)
+      ]);
+      state.upstreamConfig = configData;
+      state.upstreamStorage = storageData;
+      state.upstreamConfigError = "";
+    } catch (error) {
+      state.upstreamConfig = null;
+      state.upstreamConfigError = String(error?.message || error || "上游设置加载失败");
+      toast(state.upstreamConfigError);
+    }
+  } else if (state.view === "backups") {
+    try {
+      const data = await api("/api/admin/upstream/backups");
+      state.backups = data.items || [];
+      state.backupState = data.state || null;
+      state.backupSettings = data.settings || null;
+      state.backupsError = "";
+    } catch (error) {
+      state.backups = [];
+      state.backupsError = String(error?.message || error || "备份信息加载失败");
+      toast(state.backupsError);
+    }
   } else {
     state.settings = await api("/api/admin/settings");
   }

@@ -1303,6 +1303,43 @@ async function routeApi(req, res, url) {
     return sendJson(res, status || 502, data ?? {});
   }
 
+  // ---------- Upstream backup download (binary stream) ----------
+  if (req.method === "GET" && url.pathname === "/api/admin/upstream/backups/download") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    if (!upstreamApi.isConfigured()) {
+      return sendJson(res, 503, { error: "Upstream (chatgpt2api) is not configured" });
+    }
+    const key = url.searchParams.get("key") || "";
+    const adminUrl = upstreamApi.buildAdminUrl ? upstreamApi.buildAdminUrl(`/api/backups/download`, { key }) : null;
+    if (!adminUrl) {
+      return sendJson(res, 500, { error: "Cannot build upstream URL" });
+    }
+    const { authKey } = upstreamApi.getConfig ? upstreamApi.getConfig() : {};
+    const transport = adminUrl.protocol === "https:" ? require("https") : require("http");
+    const proxyReq = transport.request({
+      method: "GET",
+      hostname: adminUrl.hostname,
+      port: adminUrl.port || (adminUrl.protocol === "https:" ? 443 : 80),
+      path: `${adminUrl.pathname}${adminUrl.search || ""}`,
+      headers: { Authorization: `Bearer ${authKey || ""}`, Accept: "*/*" },
+      timeout: 120000
+    }, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode || 502, {
+        "Content-Type": proxyRes.headers["content-type"] || "application/octet-stream",
+        "Content-Disposition": proxyRes.headers["content-disposition"] || "attachment",
+        ...(proxyRes.headers["content-length"] ? { "Content-Length": proxyRes.headers["content-length"] } : {})
+      });
+      proxyRes.pipe(res);
+    });
+    proxyReq.on("error", () => {
+      if (!res.headersSent) sendJson(res, 502, { error: "Upstream backup download failed" });
+    });
+    proxyReq.end();
+    return;
+  }
+
   // ---------- Conversations CRUD ----------
   if (req.method === "POST" && url.pathname === "/api/conversations") {
     const current = await getCurrentUser(req);
