@@ -55,6 +55,10 @@ a { color: inherit; text-decoration: none; }
   grid-template-rows: var(--topbar-h) 1fr;
   min-height: 100vh;
 }
+.admin-shell:has(.admin-sidebar.hidden) {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
 
 /* ===== Sidebar ===== */
 .admin-sidebar {

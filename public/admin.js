@@ -89,14 +89,18 @@ function toast(message) {
 function hideSidebar() {
   const sidebar = $("#adminSidebar");
   const overlay = $("#sidebarOverlay");
+  const topbar = $(".admin-topbar");
   if (sidebar) sidebar.classList.add("hidden");
+  if (topbar) topbar.classList.add("hidden");
   if (overlay) overlay.classList.remove("open");
 }
 
 function showSidebar() {
   const sidebar = $("#adminSidebar");
   const overlay = $("#sidebarOverlay");
+  const topbar = $(".admin-topbar");
   if (sidebar) sidebar.classList.remove("hidden");
+  if (topbar) topbar.classList.remove("hidden");
   if (overlay) overlay.classList.remove("open");
 }
 
