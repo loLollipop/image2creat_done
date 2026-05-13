@@ -14,6 +14,7 @@ const state = {
   payments: [],
   accounts: [],
   logs: [],
+  logsError: "",
   logsFilter: { type: "", start_date: "", end_date: "" },
   logsExpanded: new Set(),
   logsSelected: new Set(),
@@ -150,14 +151,76 @@ function stopRegisterPolling() {
 
 function startRegisterPolling() {
   stopRegisterPolling();
+  // Only patch the live stats / logs sections during polling so the form
+  // inputs the admin is editing are never overwritten. The full form is only
+  // re-rendered after explicit user actions (save / start / stop / reset / tab
+  // navigation) via renderRegister().
   registerPollTimer = setInterval(async () => {
     if (state.view !== "register") { stopRegisterPolling(); return; }
     try {
       const data = await api("/api/admin/upstream/register");
       state.register = data.register || null;
-      renderRegister({ preserveFocus: true });
+      const reg = state.register || {};
+      patchRegisterLiveSections(reg);
+      // If the register loop finished on its own (enabled flipped to false),
+      // stop polling and refresh the form so the inputs become editable again.
+      if (!reg.enabled) {
+        stopRegisterPolling();
+        renderRegister();
+      }
     } catch (error) { console.warn("register poll failed:", error.message); }
   }, 2000);
+}
+
+// Update only the stats grid + log stream in-place. The <form> and its inputs
+// are deliberately left untouched so anything the admin is typing survives.
+function patchRegisterLiveSections(reg) {
+  const statusBadge = $("#regStatusBadge");
+  if (statusBadge) {
+    statusBadge.textContent = reg.enabled ? "运行中" : "已停止";
+    statusBadge.className = `status ${reg.enabled ? "warn" : ""}`;
+  }
+  const startBtn = $("#regStart");
+  const stopBtn = $("#regStop");
+  if (startBtn) startBtn.disabled = Boolean(reg.enabled);
+  if (stopBtn) stopBtn.disabled = !reg.enabled;
+
+  const statsGrid = $("#regStatsGrid");
+  if (statsGrid) statsGrid.innerHTML = renderRegisterStatsCards(reg);
+
+  const logsHost = $("#regLogsHost");
+  if (logsHost) logsHost.innerHTML = renderRegisterLogsBlock(reg);
+}
+
+function renderRegisterStatsCards(reg) {
+  const stats = reg.stats || {};
+  return `
+    <div class="card" style="padding:10px"><div class="muted">完成/计划</div><div style="font-size:18px;font-weight:600">${Number(stats.done||0)}/${Number(reg.total||0)}</div></div>
+    <div class="card" style="padding:10px"><div class="muted">成功/失败</div><div style="font-size:18px;font-weight:600">${Number(stats.success||0)}/${Number(stats.fail||0)}</div></div>
+    <div class="card" style="padding:10px"><div class="muted">成功率</div><div style="font-size:18px;font-weight:600">${Number(stats.success_rate||0).toFixed(1)}%</div></div>
+    <div class="card" style="padding:10px"><div class="muted">运行时间</div><div style="font-size:18px;font-weight:600">${Number(stats.elapsed_seconds||0)}s</div></div>
+    <div class="card" style="padding:10px"><div class="muted">平均注册</div><div style="font-size:18px;font-weight:600">${Number(stats.avg_seconds||0)}s</div></div>
+    <div class="card" style="padding:10px"><div class="muted">当前额度</div><div style="font-size:18px;font-weight:600">${Number(stats.current_quota||0)}</div></div>
+    <div class="card" style="padding:10px"><div class="muted">正常账号</div><div style="font-size:18px;font-weight:600">${Number(stats.current_available||0)}</div></div>
+    <div class="card" style="padding:10px"><div class="muted">运行线程</div><div style="font-size:18px;font-weight:600">${Number(stats.running||0)}/${Number(stats.threads||0)}</div></div>
+  `;
+}
+
+function renderRegisterLogsBlock(reg) {
+  const logs = Array.isArray(reg.logs) ? reg.logs : [];
+  if (!logs.length) return "";
+  return `
+    <div style="margin-top:14px">
+      <strong>注册日志</strong><span class="muted"> (最近 ${logs.length} 条)</span>
+      <div style="max-height:280px;overflow-y:auto;margin-top:6px;border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:10px;font-family:monospace;font-size:12px;line-height:1.8;background:var(--surface,#f8fafc)">
+        ${logs.slice().reverse().map((e) => {
+          const lvl = String(e.level || "");
+          const cls = lvl === "red" ? "color:#e11d48" : lvl === "green" ? "color:#059669" : lvl === "yellow" ? "color:#d97706" : "color:var(--text-muted,#64748b)";
+          return `<div style="${cls}"><span style="color:var(--text-muted,#94a3b8)">${escapeHtml(String(e.time || e.ts || "").replace(/T/, " ").slice(0, 19))}</span> ${escapeHtml(String(e.text || ""))}</div>`;
+        }).join("")}
+      </div>
+    </div>
+  `;
 }
 
 function renderPanel() {
@@ -223,7 +286,7 @@ function renderUnifiedLogs() {
               ${upstreamLogs.map((item) => renderUpstreamLogRow(item)).join("")}
             </tbody>
           </table>
-        ` : `<div class="empty">暂无记录</div>`}
+        ` : state.logsError ? `<div class="empty" style="color:#e11d48">上游调用日志加载失败：${escapeHtml(state.logsError)}</div>` : `<div class="empty">暂无记录</div>`}
       </div>
     </div>
   `;
@@ -528,32 +591,44 @@ function renderProviderFields(provider, index, disabled) {
   return fields;
 }
 
-function renderRegister({ preserveFocus = false } = {}) {
+// Returns whether a given register field should be disabled based on the
+// active mode + running state. Mirrors the upstream chatgpt2api UI in
+// vendor/chatgpt2api/web/src/app/register/components/register-card.tsx.
+function registerFieldDisabled(field, mode, enabled) {
+  if (enabled) return true;
+  if (field === "total") return mode !== "total";
+  if (field === "target_quota") return mode !== "quota";
+  if (field === "target_available") return mode !== "available";
+  if (field === "check_interval") return mode === "total";
+  return false;
+}
+
+function renderRegister() {
   const reg = state.register || {};
-  const stats = reg.stats || {};
   const mail = reg.mail || {};
   const providers = Array.isArray(mail.providers) ? mail.providers : [];
-  const logs = Array.isArray(reg.logs) ? reg.logs : [];
   const enabled = Boolean(reg.enabled);
+  const mode = String(reg.mode || "total");
   const dis = enabled ? "disabled" : "";
+  const dAttr = (field) => registerFieldDisabled(field, mode, enabled) ? "disabled" : "";
 
   const target = $("#upstreamPanel") || $("#panel");
   target.innerHTML = `
     <div class="card">
       <div class="upstream-header">
         <div><h2>注册机</h2><p class="muted">chatgpt2api 自动注册流程。可配置多个邮箱提供商，按启用顺序轮换。</p></div>
-        <div class="upstream-header-actions"><span class="status ${enabled ? "warn" : ""}">${enabled ? "运行中" : "已停止"}</span></div>
+        <div class="upstream-header-actions"><span id="regStatusBadge" class="status ${enabled ? "warn" : ""}">${enabled ? "运行中" : "已停止"}</span></div>
       </div>
 
       <form id="regForm" class="form">
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:flex-end">
-          <label>模式<select id="regMode" ${dis}>${Object.entries(REGISTER_MODE_LABELS).map(([v, l]) => `<option value="${v}" ${reg.mode === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-          <label>总数<input id="regTotal" type="number" min="1" value="${Number(reg.total || 10)}" ${dis}></label>
+          <label>模式<select id="regMode" ${dis}>${Object.entries(REGISTER_MODE_LABELS).map(([v, l]) => `<option value="${v}" ${mode === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          <label>注册总数<input id="regTotal" type="number" min="1" value="${Number(reg.total || 10)}" ${dAttr("total")}></label>
           <label>线程数<input id="regThreads" type="number" min="1" max="20" value="${Number(reg.threads || 3)}" ${dis}></label>
-          <label>目标额度<input id="regTargetQuota" type="number" min="1" value="${Number(reg.target_quota || 100)}" ${dis}></label>
-          <label>目标可用账号<input id="regTargetAvailable" type="number" min="1" value="${Number(reg.target_available || 10)}" ${dis}></label>
-          <label>检查间隔（秒）<input id="regCheckInterval" type="number" min="1" value="${Number(reg.check_interval || 5)}" ${dis}></label>
-          <label style="grid-column:1/-1">代理<input id="regProxy" value="${escapeHtml(String(reg.proxy || ""))}" placeholder="http://user:pass@host:port" ${dis}></label>
+          <label>目标剩余额度<input id="regTargetQuota" type="number" min="1" value="${Number(reg.target_quota || 100)}" ${dAttr("target_quota")}></label>
+          <label>目标可用账号<input id="regTargetAvailable" type="number" min="1" value="${Number(reg.target_available || 10)}" ${dAttr("target_available")}></label>
+          <label>检查间隔（秒）<input id="regCheckInterval" type="number" min="1" value="${Number(reg.check_interval || 5)}" ${dAttr("check_interval")}></label>
+          <label style="grid-column:1/-1">注册代理<input id="regProxy" value="${escapeHtml(String(reg.proxy || ""))}" placeholder="http://user:pass@host:port" ${dis}></label>
         </div>
 
         <div style="margin-top:16px;border-top:1px solid var(--border,#e2e8f0);padding-top:14px">
@@ -589,36 +664,18 @@ function renderRegister({ preserveFocus = false } = {}) {
         </div>
 
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
-          <button class="primary" type="submit">保存配置</button>
+          <button class="primary" type="submit" ${dis}>保存配置</button>
           <button class="secondary" type="button" id="regStart" ${enabled ? "disabled" : ""}>启动</button>
           <button class="secondary" type="button" id="regStop" ${enabled ? "" : "disabled"}>停止</button>
-          <button class="secondary" type="button" id="regReset">重置</button>
+          <button class="secondary" type="button" id="regReset" ${dis}>重置</button>
         </div>
       </form>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-top:14px">
-        <div class="card" style="padding:10px"><div class="muted">完成/计划</div><div style="font-size:18px;font-weight:600">${Number(stats.done||0)}/${Number(reg.total||0)}</div></div>
-        <div class="card" style="padding:10px"><div class="muted">成功/失败</div><div style="font-size:18px;font-weight:600">${Number(stats.success||0)}/${Number(stats.fail||0)}</div></div>
-        <div class="card" style="padding:10px"><div class="muted">成功率</div><div style="font-size:18px;font-weight:600">${Number(stats.success_rate||0).toFixed(1)}%</div></div>
-        <div class="card" style="padding:10px"><div class="muted">运行时间</div><div style="font-size:18px;font-weight:600">${Number(stats.elapsed_seconds||0)}s</div></div>
-        <div class="card" style="padding:10px"><div class="muted">平均注册</div><div style="font-size:18px;font-weight:600">${Number(stats.avg_seconds||0)}s</div></div>
-        <div class="card" style="padding:10px"><div class="muted">当前额度</div><div style="font-size:18px;font-weight:600">${Number(stats.current_quota||0)}</div></div>
-        <div class="card" style="padding:10px"><div class="muted">正常账号</div><div style="font-size:18px;font-weight:600">${Number(stats.current_available||0)}</div></div>
-        <div class="card" style="padding:10px"><div class="muted">运行线程</div><div style="font-size:18px;font-weight:600">${Number(stats.running||0)}/${Number(stats.threads||0)}</div></div>
+      <div id="regStatsGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-top:14px">
+        ${renderRegisterStatsCards(reg)}
       </div>
 
-      ${logs.length ? `
-        <div style="margin-top:14px">
-          <strong>注册日志</strong><span class="muted"> (最近 ${logs.length} 条)</span>
-          <div style="max-height:280px;overflow-y:auto;margin-top:6px;border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:10px;font-family:monospace;font-size:12px;line-height:1.8;background:var(--surface,#f8fafc)">
-            ${logs.slice().reverse().map((e) => {
-              const lvl = String(e.level || "");
-              const cls = lvl === "red" ? "color:#e11d48" : lvl === "green" ? "color:#059669" : lvl === "yellow" ? "color:#d97706" : "color:var(--text-muted,#64748b)";
-              return `<div style="${cls}"><span style="color:var(--text-muted,#94a3b8)">${escapeHtml(String(e.time || e.ts || "").replace(/T/, " ").slice(0, 19))}</span> ${escapeHtml(String(e.text || ""))}</div>`;
-            }).join("")}
-          </div>
-        </div>
-      ` : ""}
+      <div id="regLogsHost">${renderRegisterLogsBlock(reg)}</div>
     </div>
   `;
 
@@ -627,18 +684,26 @@ function renderRegister({ preserveFocus = false } = {}) {
   $("#regStart").addEventListener("click", () => registerLifecycle("start"));
   $("#regStop").addEventListener("click", () => registerLifecycle("stop"));
   $("#regReset").addEventListener("click", () => registerLifecycle("reset"));
+  // Mode changes only re-evaluate which numeric fields are enabled. We do
+  // *not* re-render the whole form so anything the admin is currently typing
+  // in other inputs is preserved.
+  $("#regMode")?.addEventListener("change", (event) => {
+    const newMode = String(event.target.value || "total");
+    if (state.register) state.register.mode = newMode;
+    applyModeDisabledState(newMode);
+  });
   $("#regAddProvider")?.addEventListener("click", () => {
-    const reg = state.register || {};
-    const mail = reg.mail || {};
-    const providers = Array.isArray(mail.providers) ? [...mail.providers] : [];
-    providers.push({ type: "tempmail_lol", enable: true, ...getProviderDefaults("tempmail_lol") });
+    syncFormToState();
     if (!state.register) state.register = {};
     if (!state.register.mail) state.register.mail = {};
+    const providers = Array.isArray(state.register.mail.providers) ? [...state.register.mail.providers] : [];
+    providers.push({ type: "tempmail_lol", enable: true, ...getProviderDefaults("tempmail_lol") });
     state.register.mail.providers = providers;
     renderRegister();
   });
   $$("[data-delete-provider]").forEach((btn) => {
     btn.addEventListener("click", () => {
+      syncFormToState();
       const idx = Number(btn.dataset.deleteProvider);
       const providers = [...(state.register?.mail?.providers || [])];
       providers.splice(idx, 1);
@@ -648,6 +713,7 @@ function renderRegister({ preserveFocus = false } = {}) {
   });
   $$(".prov-type").forEach((sel) => {
     sel.addEventListener("change", () => {
+      syncFormToState();
       const idx = Number(sel.dataset.idx);
       const providers = [...(state.register?.mail?.providers || [])];
       const oldProv = providers[idx] || {};
@@ -686,6 +752,36 @@ function collectRegisterMailConfig() {
     wait_interval: Number($("#regMailWaitInterval")?.value || 2),
     providers
   };
+}
+
+// Capture the current values from the rendered register form back into
+// state.register. Used right before any structural re-render (add / delete
+// provider, provider-type change) so the admin's unsaved edits survive.
+function syncFormToState() {
+  if (!$("#regForm")) return;
+  if (!state.register) state.register = {};
+  const reg = state.register;
+  if ($("#regMode")) reg.mode = $("#regMode").value;
+  if ($("#regTotal")) reg.total = Number($("#regTotal").value || 0);
+  if ($("#regThreads")) reg.threads = Number($("#regThreads").value || 0);
+  if ($("#regTargetQuota")) reg.target_quota = Number($("#regTargetQuota").value || 0);
+  if ($("#regTargetAvailable")) reg.target_available = Number($("#regTargetAvailable").value || 0);
+  if ($("#regCheckInterval")) reg.check_interval = Number($("#regCheckInterval").value || 0);
+  if ($("#regProxy")) reg.proxy = $("#regProxy").value;
+  reg.mail = collectRegisterMailConfig();
+}
+
+// Update only the `disabled` attribute on numeric mode-sensitive inputs when
+// the mode dropdown changes, leaving all other inputs and their values
+// untouched (so the admin doesn't lose work-in-progress edits).
+function applyModeDisabledState(mode) {
+  const reg = state.register || {};
+  const enabled = Boolean(reg.enabled);
+  const map = { regTotal: "total", regTargetQuota: "target_quota", regTargetAvailable: "target_available", regCheckInterval: "check_interval" };
+  for (const [id, field] of Object.entries(map)) {
+    const input = $(`#${id}`);
+    if (input) input.disabled = registerFieldDisabled(field, mode, enabled);
+  }
 }
 
 async function saveRegisterConfig(event) {
@@ -988,20 +1084,25 @@ function renderSettings() {
 
 async function loadPanel() {
   if (state.view === "logs") {
-    const logsData = await (async () => {
-      try {
-        const params = new URLSearchParams();
-        const filter = state.logsFilter || {};
-        if (filter.type) params.set("type", filter.type);
-        if (filter.start_date) params.set("start_date", filter.start_date);
-        if (filter.end_date) params.set("end_date", filter.end_date);
-        const query = params.toString();
-        return await api(`/api/admin/upstream/logs${query ? `?${query}` : ""}`);
-      } catch {
-        return { items: [] };
-      }
-    })();
-    state.logs = Array.isArray(logsData.items) ? logsData.items : [];
+    try {
+      const params = new URLSearchParams();
+      const filter = state.logsFilter || {};
+      if (filter.type) params.set("type", filter.type);
+      if (filter.start_date) params.set("start_date", filter.start_date);
+      if (filter.end_date) params.set("end_date", filter.end_date);
+      const query = params.toString();
+      const logsData = await api(`/api/admin/upstream/logs${query ? `?${query}` : ""}`);
+      state.logs = Array.isArray(logsData.items) ? logsData.items : [];
+      state.logsError = "";
+    } catch (error) {
+      // Surface the real upstream error instead of silently showing an empty
+      // table — typical failure is `Upstream (chatgpt2api) is not configured`
+      // (503) or a bad CHATGPT2API_AUTH_KEY (401). Without this the admin
+      // just sees "暂无记录" with no diagnostic.
+      state.logs = [];
+      state.logsError = String(error?.message || error || "上游调用日志加载失败");
+      toast(state.logsError);
+    }
   } else if (state.view === "users") {
     const data = await api("/api/admin/users");
     state.users = data.users || [];
@@ -1024,7 +1125,12 @@ async function loadPanel() {
     try {
       const data = await api("/api/admin/upstream/register");
       state.register = data.register || null;
-      startRegisterPolling();
+      // Only poll when the register loop is actually running. Polling while
+      // stopped would replace the form's stats / logs sections every 2s with
+      // identical data and was previously also clobbering admin-edited form
+      // inputs (the function ignored its preserveFocus flag).
+      if (state.register?.enabled) startRegisterPolling();
+      else stopRegisterPolling();
     } catch (error) { state.register = null; toast(error.message); }
   } else {
     state.settings = await api("/api/admin/settings");
