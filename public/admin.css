@@ -506,3 +506,160 @@ td code {
   font-size: 12px;
   font-weight: 700;
 }
+
+/* ===================== Accounts (号池) ===================== */
+.status.ok {
+  background: #ecfdf3;
+  color: #027a48;
+}
+.status.muted {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.account-card {
+  display: grid;
+  gap: 16px;
+}
+
+.account-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+.account-stat-card {
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: #fff;
+  display: grid;
+  gap: 4px;
+}
+.account-stat-card .label {
+  font-size: 12px;
+  color: #667085;
+  font-weight: 600;
+}
+.account-stat-card .value {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+.account-stat-card.tone-ok .value { color: #027a48; }
+.account-stat-card.tone-warn .value { color: #b45309; }
+.account-stat-card.tone-danger .value { color: #b42318; }
+.account-stat-card.tone-muted .value { color: #64748b; }
+.account-stat-card.tone-info .value { color: #1d4ed8; }
+
+.account-filters {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+.account-filters label {
+  display: grid;
+  gap: 4px;
+  min-width: 140px;
+  margin: 0;
+}
+.account-filters .account-search { min-width: 220px; flex: 1 1 220px; }
+.account-filters .account-filter-spacer { flex: 1 1 0; }
+
+.account-bulkbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  color: #1d4ed8;
+  font-size: 13px;
+}
+.account-bulkbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.account-table-wrap table { min-width: 980px; }
+.account-table-wrap th { white-space: nowrap; }
+.account-table-wrap td .token-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: #f8fafc;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+}
+
+.type-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+.type-badge.type-pro,
+.type-badge.type-prolite {
+  background: linear-gradient(180deg, #1e293b, #0f172a);
+  color: #facc15;
+  border-color: #0f172a;
+}
+.type-badge.type-plus {
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+.icon-btn {
+  border: 1px solid var(--line, #e2e8f0);
+  background: #fff;
+  color: #334155;
+  padding: 5px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.icon-btn:hover { background: #f1f5f9; }
+.icon-btn.danger { color: #b42318; }
+.icon-btn.danger:hover { background: #fef3f2; }
+
+.account-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 4px 2px;
+  flex-wrap: wrap;
+}
+.account-pagination .pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.account-pagination .pager select {
+  width: auto;
+  min-width: 96px;
+  padding: 6px 8px;
+}
+.account-pagination .pager button {
+  padding: 4px 12px;
+  font-size: 14px;
+}
+.account-pagination .pager button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
