@@ -8,6 +8,7 @@ const state = {
   settings: null,
   users: [],
   records: [],
+  generations: [],
   redeemCodes: [],
   redeemFilter: "",
   transactions: [],
@@ -31,7 +32,14 @@ const state = {
   registerLogsCollapsed: false,
   lastBatch: null,
   showAdvancedSettings: false,
-  showUpstreamTabs: false
+  showUpstreamTabs: false,
+  upstreamConfig: null,
+  upstreamConfigError: "",
+  upstreamStorage: null,
+  backups: [],
+  backupState: null,
+  backupSettings: null,
+  backupsError: ""
 };
 
 let registerPollTimer = null;
@@ -114,7 +122,7 @@ function renderDenied() {
 
 // ===================== Main Admin Layout =====================
 
-const UPSTREAM_VIEWS = ["accounts", "register", "settings", "logs"];
+const UPSTREAM_VIEWS = ["accounts", "register", "upstream_settings", "logs", "backups", "settings"];
 
 function renderAdmin() {
   $("#logoutBtn").classList.remove("hidden");
@@ -125,17 +133,21 @@ function renderAdmin() {
       <p>管理用户、积分、接口，查看生图日志。</p>
     </section>
     <div class="tabs">
+      <button class="secondary ${state.view === "generations" ? "active" : ""}" data-view="generations">生图记录</button>
       <button class="secondary ${state.view === "users" ? "active" : ""}" data-view="users">用户管理</button>
       <button class="secondary ${state.view === "redeem" ? "active" : ""}" data-view="redeem">卡密管理</button>
       <button class="secondary ${state.view === "transactions" ? "active" : ""}" data-view="transactions">积分流水</button>
+      <button class="secondary ${state.view === "payments" ? "active" : ""}" data-view="payments">支付订单</button>
       <button class="secondary ${isUpstreamView ? "active" : ""}" data-view="upstream">上游管理</button>
     </div>
     ${isUpstreamView ? `
       <div class="sub-tabs">
         <button class="secondary ${state.view === "accounts" ? "active" : ""}" data-view="accounts">号池</button>
-        <button class="secondary ${state.view === "register" ? "active" : ""}" data-view="register">注册机</button>
-        <button class="secondary ${state.view === "settings" ? "active" : ""}" data-view="settings">接口设置</button>
         <button class="secondary ${state.view === "logs" ? "active" : ""}" data-view="logs">调用日志</button>
+        <button class="secondary ${state.view === "register" ? "active" : ""}" data-view="register">注册机</button>
+        <button class="secondary ${state.view === "upstream_settings" ? "active" : ""}" data-view="upstream_settings">上游设置</button>
+        <button class="secondary ${state.view === "backups" ? "active" : ""}" data-view="backups">备份</button>
+        <button class="secondary ${state.view === "settings" ? "active" : ""}" data-view="settings">接口设置</button>
       </div>
     ` : ""}
     <section id="panel"></section>
@@ -258,6 +270,7 @@ function renderRegisterLogsBlock(reg) {
 }
 
 function renderPanel() {
+  if (state.view === "generations") return renderGenerations();
   if (state.view === "logs") return renderUnifiedLogs();
   if (state.view === "users") return renderUsers();
   if (state.view === "redeem") return renderRedeem();
@@ -265,6 +278,8 @@ function renderPanel() {
   if (state.view === "payments") return renderPayments();
   if (state.view === "accounts") return renderAccounts();
   if (state.view === "register") return renderRegister();
+  if (state.view === "upstream_settings") return renderUpstreamSettings();
+  if (state.view === "backups") return renderBackups();
   renderSettings();
 }
 
@@ -1336,6 +1351,213 @@ function renderPayments() {
   `;
 }
 
+// ===================== Generations (生图记录) =====================
+
+function renderGenerations() {
+  const records = state.generations || [];
+  const panel = $("#panel");
+  if (!panel) return;
+  panel.innerHTML = `
+    <div class="card">
+      <h2>生图记录</h2>
+      <p class="muted">管理员可查看所有用户的生成记录，包括提示词、用户、IP、浏览器信息和错误信息。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>时间</th><th>用户</th><th>提示词</th><th>模型</th><th>尺寸</th><th>状态</th><th>上游</th><th>IP</th><th>预览</th>
+          </tr></thead>
+          <tbody>
+            ${records.length ? records.map((r) => `
+              <tr>
+                <td class="muted" style="white-space:nowrap">${fmt(r.createdAt)}</td>
+                <td>${escapeHtml(r.userName || r.userEmail || r.userId || "")}</td>
+                <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(r.prompt || "")}">${escapeHtml((r.prompt || "").slice(0, 80))}</td>
+                <td>${escapeHtml(r.model || "")}</td>
+                <td>${escapeHtml(r.size || "")}</td>
+                <td><span class="status ${r.status === "completed" ? "ok" : r.status === "failed" ? "failed" : ""}">${escapeHtml(r.status || "")}</span></td>
+                <td>${escapeHtml(r.upstream || "")}</td>
+                <td class="muted" style="font-size:11px">${escapeHtml(r.ip || "")}</td>
+                <td>${r.imageUrl ? `<a href="${escapeHtml(r.imageUrl)}" target="_blank" style="font-size:12px">查看</a>` : ""}</td>
+              </tr>
+            `).join("") : `<tr><td colspan="9" class="empty">暂无生图记录</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// ===================== Upstream Settings (上游设置) =====================
+
+function renderUpstreamSettings() {
+  const target = $("#upstreamPanel") || $("#panel");
+  if (!target) return;
+  const config = state.upstreamConfig;
+  const storage = state.upstreamStorage;
+  const configJson = config ? JSON.stringify(config.config || config, null, 2) : "";
+  target.innerHTML = `
+    <div class="card">
+      <div class="upstream-header">
+        <div>
+          <h2>上游设置</h2>
+          <p class="muted">编辑 chatgpt2api 的 config.json 配置，测试代理连通性，查看存储信息。</p>
+        </div>
+      </div>
+      ${state.upstreamConfigError ? `<div class="empty" style="color:#e11d48">${escapeHtml(state.upstreamConfigError)}</div>` : `
+        <form id="upstreamConfigForm" class="form">
+          <label>config.json
+            <textarea id="upstreamConfigInput" rows="16" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;width:100%;resize:vertical">${escapeHtml(configJson)}</textarea>
+          </label>
+          <button class="primary" type="submit">保存配置</button>
+        </form>
+
+        <div style="margin-top:20px">
+          <h3>代理测试</h3>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="proxyTestUrl" type="text" placeholder="留空使用当前配置的代理" style="flex:1">
+            <button class="secondary" type="button" id="proxyTestBtn">测试代理</button>
+          </div>
+          <div id="proxyTestResult" class="muted" style="margin-top:8px"></div>
+        </div>
+
+        ${storage ? `
+          <div style="margin-top:20px">
+            <h3>存储信息</h3>
+            <pre style="background:#f8fafc;padding:12px;border-radius:8px;font-size:12px;overflow-x:auto">${escapeHtml(JSON.stringify(storage, null, 2))}</pre>
+          </div>
+        ` : ""}
+      `}
+    </div>
+  `;
+  $("#upstreamConfigForm")?.addEventListener("submit", saveUpstreamConfig);
+  $("#proxyTestBtn")?.addEventListener("click", testUpstreamProxy);
+}
+
+async function saveUpstreamConfig(event) {
+  event.preventDefault();
+  try {
+    const raw = $("#upstreamConfigInput").value.trim();
+    const body = JSON.parse(raw);
+    const data = await api("/api/admin/upstream/settings", { method: "POST", body: JSON.stringify(body) });
+    state.upstreamConfig = data;
+    toast("上游配置已保存");
+    renderUpstreamSettings();
+  } catch (error) { toast(error.message); }
+}
+
+async function testUpstreamProxy() {
+  const resultEl = $("#proxyTestResult");
+  if (resultEl) resultEl.textContent = "测试中…";
+  try {
+    const url = ($("#proxyTestUrl")?.value || "").trim();
+    const data = await api("/api/admin/upstream/proxy/test", { method: "POST", body: JSON.stringify({ url }) });
+    if (resultEl) resultEl.textContent = JSON.stringify(data.result || data, null, 2);
+  } catch (error) { if (resultEl) resultEl.textContent = `测试失败: ${error.message}`; }
+}
+
+// ===================== Backups (备份) =====================
+
+function renderBackups() {
+  const target = $("#upstreamPanel") || $("#panel");
+  if (!target) return;
+  const backups = state.backups || [];
+  const backupState = state.backupState || {};
+  const settings = state.backupSettings || {};
+  target.innerHTML = `
+    <div class="card">
+      <div class="upstream-header">
+        <div>
+          <h2>备份</h2>
+          <p class="muted">管理 chatgpt2api 的数据备份。可手动触发备份、查看历史、删除旧备份。</p>
+        </div>
+        <div class="upstream-header-actions">
+          <button class="secondary" type="button" id="backupTestBtn">测试连通</button>
+          <button class="primary" type="button" id="backupRunBtn">${backupState.running ? "正在备份…" : "立即备份"}</button>
+        </div>
+      </div>
+      ${state.backupsError ? `<div class="empty" style="color:#e11d48">${escapeHtml(state.backupsError)}</div>` : ""}
+      ${settings.enabled !== undefined ? `
+        <div class="muted" style="margin-bottom:12px">
+          自动备份: ${settings.enabled ? "已启用" : "未启用"}
+          ${settings.cron ? ` · Cron: ${escapeHtml(settings.cron)}` : ""}
+          ${settings.backend ? ` · 后端: ${escapeHtml(settings.backend)}` : ""}
+        </div>
+      ` : ""}
+      <div id="backupTestResult" class="muted" style="margin-bottom:12px"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>名称</th><th>大小</th><th>时间</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            ${backups.length ? backups.map((b) => `
+              <tr>
+                <td>${escapeHtml(b.name || b.key || "")}</td>
+                <td>${b.size ? (b.size / 1024).toFixed(1) + " KB" : "-"}</td>
+                <td class="muted">${fmt(b.created_at || b.createdAt || b.timestamp)}</td>
+                <td>${escapeHtml(b.status || "完成")}</td>
+                <td>
+                  <button class="tiny secondary" data-backup-detail="${escapeHtml(b.key || b.name || "")}">详情</button>
+                  <button class="tiny secondary" data-backup-download="${escapeHtml(b.key || b.name || "")}">下载</button>
+                  <button class="tiny" style="color:#e11d48" data-backup-delete="${escapeHtml(b.key || b.name || "")}">删除</button>
+                </td>
+              </tr>
+            `).join("") : `<tr><td colspan="5" class="empty">暂无备份</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+  $("#backupRunBtn")?.addEventListener("click", runBackup);
+  $("#backupTestBtn")?.addEventListener("click", testBackupConnection);
+  target.querySelectorAll("[data-backup-delete]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteBackup(btn.dataset.backupDelete));
+  });
+  target.querySelectorAll("[data-backup-detail]").forEach((btn) => {
+    btn.addEventListener("click", () => showBackupDetail(btn.dataset.backupDetail));
+  });
+  target.querySelectorAll("[data-backup-download]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      window.open(`/api/admin/upstream/backups/download?key=${encodeURIComponent(btn.dataset.backupDownload)}`, "_blank");
+    });
+  });
+}
+
+async function runBackup() {
+  try {
+    await api("/api/admin/upstream/backups/run", { method: "POST" });
+    toast("备份任务已启动");
+    await loadPanel();
+    renderBackups();
+  } catch (error) { toast(error.message); }
+}
+
+async function testBackupConnection() {
+  const resultEl = $("#backupTestResult");
+  if (resultEl) resultEl.textContent = "测试中…";
+  try {
+    const data = await api("/api/admin/upstream/backups/test", { method: "POST" });
+    if (resultEl) resultEl.textContent = `连通测试结果: ${JSON.stringify(data.result || data)}`;
+  } catch (error) { if (resultEl) resultEl.textContent = `测试失败: ${error.message}`; }
+}
+
+async function deleteBackup(key) {
+  if (!confirm(`确定要删除备份 ${key} 吗？`)) return;
+  try {
+    await api("/api/admin/upstream/backups/delete", { method: "POST", body: JSON.stringify({ key }) });
+    toast("备份已删除");
+    await loadPanel();
+    renderBackups();
+  } catch (error) { toast(error.message); }
+}
+
+async function showBackupDetail(key) {
+  try {
+    const data = await api(`/api/admin/upstream/backups/detail?key=${encodeURIComponent(key)}`);
+    alert(JSON.stringify(data.item || data, null, 2));
+  } catch (error) { toast(error.message); }
+}
+
+
+
 // ===================== Settings (simplified) =====================
 
 function renderSettings() {
@@ -1419,7 +1641,12 @@ function renderSettings() {
 // ===================== Data loading =====================
 
 async function loadPanel() {
-  if (state.view === "logs") {
+  if (state.view === "generations") {
+    try {
+      const data = await api("/api/admin/generations");
+      state.generations = data.records || [];
+    } catch (error) { state.generations = []; toast(error.message); }
+  } else if (state.view === "logs") {
     try {
       const params = new URLSearchParams();
       const filter = state.logsFilter || {};
@@ -1431,10 +1658,6 @@ async function loadPanel() {
       state.logs = Array.isArray(logsData.items) ? logsData.items : [];
       state.logsError = "";
     } catch (error) {
-      // Surface the real upstream error instead of silently showing an empty
-      // table — typical failure is `Upstream (chatgpt2api) is not configured`
-      // (503) or a bad CHATGPT2API_AUTH_KEY (401). Without this the admin
-      // just sees "暂无记录" with no diagnostic.
       state.logs = [];
       state.logsError = String(error?.message || error || "上游调用日志加载失败");
       toast(state.logsError);
@@ -1461,13 +1684,35 @@ async function loadPanel() {
     try {
       const data = await api("/api/admin/upstream/register");
       state.register = data.register || null;
-      // Only poll when the register loop is actually running. Polling while
-      // stopped would replace the form's stats / logs sections every 2s with
-      // identical data and was previously also clobbering admin-edited form
-      // inputs (the function ignored its preserveFocus flag).
       if (state.register?.enabled) startRegisterPolling();
       else stopRegisterPolling();
     } catch (error) { state.register = null; toast(error.message); }
+  } else if (state.view === "upstream_settings") {
+    try {
+      const [configData, storageData] = await Promise.all([
+        api("/api/admin/upstream/settings"),
+        api("/api/admin/upstream/storage").catch(() => null)
+      ]);
+      state.upstreamConfig = configData;
+      state.upstreamStorage = storageData;
+      state.upstreamConfigError = "";
+    } catch (error) {
+      state.upstreamConfig = null;
+      state.upstreamConfigError = String(error?.message || error || "上游设置加载失败");
+      toast(state.upstreamConfigError);
+    }
+  } else if (state.view === "backups") {
+    try {
+      const data = await api("/api/admin/upstream/backups");
+      state.backups = data.items || [];
+      state.backupState = data.state || null;
+      state.backupSettings = data.settings || null;
+      state.backupsError = "";
+    } catch (error) {
+      state.backups = [];
+      state.backupsError = String(error?.message || error || "备份信息加载失败");
+      toast(state.backupsError);
+    }
   } else {
     state.settings = await api("/api/admin/settings");
   }
