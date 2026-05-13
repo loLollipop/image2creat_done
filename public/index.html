@@ -34,10 +34,6 @@
             <span class="sparkle-icon" aria-hidden="true">✨</span>
             <span data-i18n="promptLibrary">提示词库</span>
           </button>
-          <button id="imageEditorBtn" class="nav-pill" type="button">
-            <i class="ri-magic-line"></i>
-            <span data-i18n="imageEditor">图片编辑</span>
-          </button>
           <button id="langBtn" class="icon-pill" type="button" title="Language">中/EN</button>
           <button id="creditsBtn" class="nav-pill hidden" type="button">
             <i class="ri-coin-line"></i>
@@ -46,10 +42,6 @@
           <button id="myWorksBtn" class="nav-pill hidden" type="button">
             <i class="ri-gallery-view-2"></i>
             <span data-i18n="myWorks">我的作品</span>
-          </button>
-          <button id="convSidebarBtn" class="nav-pill hidden" type="button">
-            <i class="ri-chat-history-line"></i>
-            <span>对话</span>
           </button>
           <button id="loginBtn" class="dark-pill" type="button">
             <i class="ri-login-circle-line"></i>
@@ -92,14 +84,6 @@
           <p class="reviews"><i class="ri-image-circle-line"></i><span data-i18n="reviews">生成后会自动保存到你的图库</span></p>
         </section>
 
-        <section id="recentSection" class="recent-section">
-          <div class="recent-header">
-            <h2 data-i18n="recentTitle">最近创作</h2>
-            <p data-i18n="recentSubtitle">来自你的灵感</p>
-          </div>
-          <div id="recentMasonry" class="recent-masonry"></div>
-        </section>
-
         <section class="inspiration-band">
           <div class="inspiration-head">
             <span data-i18n="examplesLabel">灵感示例</span>
@@ -131,73 +115,6 @@
                 <span id="funMessage">Generating...</span>
               </div>
               <div id="historyList" class="history-list"></div>
-              <section id="editorView" class="workspace-editor-panel hidden">
-                <section class="editor-stage">
-                  <div class="editor-header">
-                    <button class="editor-brand" type="button" data-editor-home>
-                      <span class="brand-dot"><i class="ri-image-spark-line"></i></span>
-                      <span data-i18n="imageEditor">图片编辑</span>
-                    </button>
-                    <div class="editor-tabs" aria-label="创作模式">
-                      <button type="button" data-editor-create>
-                        <i class="ri-sparkling-2-line"></i>
-                        <span data-i18n="create">生成</span>
-                      </button>
-                      <button class="active" type="button">
-                        <i class="ri-pencil-ruler-2-line"></i>
-                        <span data-i18n="editImage">编辑</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div class="editor-workspace">
-                    <div class="editor-toolbar" role="toolbar" aria-label="编辑工具">
-                      <button class="active" type="button" data-editor-tool="brush" title="画笔"><i class="ri-brush-line"></i></button>
-                      <button type="button" data-editor-tool="rect" title="矩形"><i class="ri-checkbox-blank-line"></i></button>
-                      <button type="button" data-editor-tool="eraser" title="橡皮擦"><i class="ri-eraser-line"></i></button>
-                      <button type="button" data-editor-undo title="撤销"><i class="ri-arrow-go-back-line"></i></button>
-                      <input id="editorColorInput" type="color" value="#7c3aed" title="标记颜色">
-                    </div>
-                    <div id="editorCanvasArea" class="editor-canvas-area">
-                      <label id="editorUploadCard" class="editor-upload-card">
-                        <i class="ri-image-add-line"></i>
-                        <strong data-i18n="uploadEditImage">上传或从作品中选择图片</strong>
-                        <span data-i18n="uploadEditHint">支持画笔、矩形选区和局部编辑描述</span>
-                        <input id="editorUploadInput" type="file" accept="image/*">
-                      </label>
-                      <div id="editorImageFrame" class="editor-image-frame hidden">
-                        <div id="editorImageScaler" class="editor-image-scaler">
-                          <img id="editorSourceImage" alt="编辑图片">
-                          <canvas id="editorMaskCanvas"></canvas>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="editor-zoom">
-                      <button type="button" data-editor-zoom="-"><i class="ri-subtract-line"></i></button>
-                      <span id="editorZoomText">100%</span>
-                      <button type="button" data-editor-zoom="+"><i class="ri-add-line"></i></button>
-                    </div>
-                    <label class="editor-keyboard" title="快捷键"><i class="ri-keyboard-line"></i></label>
-                    <form id="editorPromptForm" class="editor-prompt-bar">
-                      <label class="editor-attach">
-                        <i class="ri-image-add-line"></i>
-                        <input id="editorBottomUploadInput" type="file" accept="image/*">
-                      </label>
-                      <i class="ri-sparkling-2-fill editor-prompt-icon"></i>
-                      <input id="editorPromptInput" placeholder="让背景池塘开满荷花">
-                      <label class="square-toggle editor-public-toggle">
-                        <span data-i18n="publishToSquare">公开到广场</span>
-                        <input id="editorPublicInput" type="checkbox">
-                        <span class="toggle-track" aria-hidden="true"></span>
-                      </label>
-                      <button type="submit">
-                        <span data-i18n="create">生成</span>
-                        <i class="ri-arrow-right-line"></i>
-                      </button>
-                    </form>
-                  </div>
-                </section>
-              </section>
               <div class="bottom-spacer"></div>
             </div>
             <div id="stickyComposerMount" class="sticky-composer"></div>
