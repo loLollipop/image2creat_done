@@ -7,7 +7,6 @@ const state = {
   history: [],
   allGenerations: [],
   activeConversationId: null,
-  workspaceMode: "create",
   generating: false,
   funIndex: 0,
   funTimer: null,
@@ -32,19 +31,6 @@ const state = {
   promptVisible: 20,
   promptLoading: true,
   pendingAction: null,
-  editor: {
-    imageUrl: "",
-    imageData: "",
-    prompt: "",
-    sourceGenerationId: null,
-    tool: "brush",
-    color: "#7c3aed",
-    zoom: 1,
-    history: [],
-    pointerDown: false,
-    startPoint: null,
-    snapshot: null
-  },
   stats: {
     todayGenerated: 4200
   }
@@ -54,7 +40,6 @@ const i18n = {
   zh: {
     brand: "Image Studio",
     promptLibrary: "提示词库",
-    imageEditor: "图片编辑",
     myWorks: "我的作品",
     login: "登录",
     logout: "退出",
@@ -83,10 +68,9 @@ const i18n = {
     download: "保存",
     edit: "重新编辑",
     editImage: "编辑",
-    openEditor: "图片编辑",
+    openEditor: "继续修改",
     emptyWorks: "还没有生成记录",
     uploadEditImage: "上传或从作品中选择图片",
-    uploadEditHint: "支持画笔、矩形选区和局部编辑描述",
     copy: "复制提示词",
     use: "去生成",
     libraryBadge: "精选提示词库",
@@ -176,7 +160,6 @@ const i18n = {
   en: {
     brand: "Image Studio",
     promptLibrary: "Prompts",
-    imageEditor: "Image Editor",
     myWorks: "My Works",
     login: "Login",
     logout: "Logout",
@@ -205,10 +188,9 @@ const i18n = {
     download: "Save",
     edit: "Edit prompt",
     editImage: "Edit",
-    openEditor: "Edit image",
+    openEditor: "Continue editing",
     emptyWorks: "No generated images yet",
     uploadEditImage: "Upload or choose an image",
-    uploadEditHint: "Brush, rectangle selection, and local edit prompts",
     copy: "Copy prompt",
     use: "Generate",
     libraryBadge: "Curated Prompt Library",
@@ -416,13 +398,11 @@ const elements = {
   homeView: $("#homeView"),
   chatView: $("#chatView"),
   libraryView: $("#libraryView"),
-  editorView: $("#editorView"),
   modalLayer: $("#modalLayer"),
   toastLayer: $("#toastLayer"),
   brandBtn: $("#brandBtn"),
   startCreateBtn: $("#startCreateBtn"),
   promptLibraryBtn: $("#promptLibraryBtn"),
-  imageEditorBtn: $("#imageEditorBtn"),
   langBtn: $("#langBtn"),
   creditsBtn: $("#creditsBtn"),
   creditsText: $("#creditsText"),
@@ -431,7 +411,6 @@ const elements = {
   logoutBtn: $("#logoutBtn"),
   apiStatus: $("#apiStatus"),
   todayGeneratedText: $("#todayGeneratedText"),
-  heroComposerMount: $("#heroComposerMount"),
   stickyComposerMount: $("#stickyComposerMount"),
   workspaceNewBtn: $("#workspaceNewBtn"),
   workspaceConvList: $("#workspaceConvList"),
@@ -439,28 +418,13 @@ const elements = {
   generationStatus: $("#generationStatus"),
   funMessage: $("#funMessage"),
   historyList: $("#historyList"),
-  recentSection: $("#recentSection"),
-  recentMasonry: $("#recentMasonry"),
   exampleGrid: $("#exampleGrid"),
   openLibraryInlineBtn: $("#openLibraryInlineBtn"),
   librarySearchForm: $("#librarySearchForm"),
   librarySearchInput: $("#librarySearchInput"),
   tagFilters: $("#tagFilters"),
   promptGrid: $("#promptGrid"),
-  composerTemplate: $("#composerTemplate"),
-  editorCanvasArea: $("#editorCanvasArea"),
-  editorUploadCard: $("#editorUploadCard"),
-  editorUploadInput: $("#editorUploadInput"),
-  editorBottomUploadInput: $("#editorBottomUploadInput"),
-  editorImageFrame: $("#editorImageFrame"),
-  editorImageScaler: $("#editorImageScaler"),
-  editorSourceImage: $("#editorSourceImage"),
-  editorMaskCanvas: $("#editorMaskCanvas"),
-  editorPromptForm: $("#editorPromptForm"),
-  editorPromptInput: $("#editorPromptInput"),
-  editorPublicInput: $("#editorPublicInput"),
-  editorZoomText: $("#editorZoomText"),
-  editorColorInput: $("#editorColorInput")
+  composerTemplate: $("#composerTemplate")
 };
 
 let heroVideoWatchdog = null;
@@ -548,8 +512,6 @@ function updateNav() {
   elements.creditsBtn.classList.toggle("hidden", !loggedIn);
   elements.myWorksBtn.classList.toggle("hidden", !loggedIn);
   elements.creditsText.textContent = state.user ? `${text("credits")} ${state.user.credits}` : "0";
-  const convBtn = document.getElementById("convSidebarBtn");
-  if (convBtn) convBtn.classList.toggle("hidden", !loggedIn);
 
   const hasApiKey = Boolean(state.settings?.hasApiKey);
   elements.apiStatus.textContent = hasApiKey
@@ -560,155 +522,71 @@ function updateNav() {
   elements.apiStatus.style.color = hasApiKey ? "#64748b" : "#b42318";
 }
 
-function setWorkspaceMode(mode) {
-  state.workspaceMode = mode === "edit" ? "edit" : "create";
-  if (elements.editorView) {
-    elements.editorView.classList.toggle("hidden", state.view !== "workspace" || state.workspaceMode !== "edit");
-  }
-}
-
 function setView(view) {
   state.view = view;
   elements.homeView.classList.toggle("hidden", view !== "landing");
   elements.chatView.classList.toggle("hidden", view !== "workspace");
   elements.libraryView.classList.toggle("hidden", view !== "library");
-  setWorkspaceMode(state.workspaceMode);
   if (view === "library") renderLibrary();
   if (view === "landing") requestAnimationFrame(playHeroVideo);
   updateNav();
 }
 
-function resetEditorWorkspace() {
-  state.editor.imageUrl = "";
-  state.editor.imageData = "";
-  state.editor.prompt = "";
-  state.editor.sourceGenerationId = null;
-  state.editor.history = [];
-  state.editor.zoom = 1;
+function clearComposerReferences() {
+  for (const reference of state.references) {
+    if (reference?.url?.startsWith("blob:")) URL.revokeObjectURL(reference.url);
+  }
+  state.references = [];
+}
+
+function setComposerReference({ url = "", imageData = "", name = "", sourceGenerationId = null, conversationId = null } = {}) {
+  clearComposerReferences();
+  const resolvedUrl = url || imageData;
+  if (!resolvedUrl) return;
+  state.references = [{
+    url: resolvedUrl,
+    imageData: imageData || (resolvedUrl.startsWith("data:") ? resolvedUrl : ""),
+    name: name || "image-reference",
+    sourceGenerationId: sourceGenerationId || null,
+    conversationId: conversationId || null
+  }];
 }
 
 function openWorkspace(options = {}) {
-  const { prompt = "", imageUrl = "", imageData = "", openEditor = false, sourceGenerationId = "" } = options;
-  if (prompt) state.draftPrompt = prompt;
-  setView("workspace");
+  const {
+    prompt = "",
+    imageUrl = "",
+    imageData = "",
+    sourceGenerationId = "",
+    conversationId = null,
+    preserveReference = false
+  } = options;
+  if (typeof prompt === "string") state.draftPrompt = prompt;
   if (imageUrl || imageData) {
-    setEditorImage(imageUrl || imageData, imageData || "", sourceGenerationId || null);
-  } else if (openEditor && !sourceGenerationId) {
-    resetEditorWorkspace();
+    setComposerReference({
+      url: imageUrl || imageData,
+      imageData: imageData || "",
+      sourceGenerationId: sourceGenerationId || null,
+      conversationId: conversationId || state.activeConversationId || null
+    });
+  } else if (!preserveReference) {
+    clearComposerReferences();
   }
-  if (openEditor || imageUrl || imageData) {
-    state.editor.prompt = prompt || state.editor.prompt;
-    setWorkspaceMode("edit");
-    renderEditor();
-    setTimeout(() => elements.editorPromptInput?.focus(), 80);
-  } else {
-    setWorkspaceMode("create");
-    setTimeout(() => $(".prompt-box", elements.stickyComposerMount)?.focus(), 80);
-  }
+  setView("workspace");
   syncComposers();
+  syncReferences();
+  setTimeout(() => $(".prompt-box", elements.stickyComposerMount)?.focus(), 80);
 }
 
 function renderAll() {
   applyI18n();
   updateNav();
-  renderRecentCreations();
   renderExamples();
   renderHistory();
-  renderEditor();
   renderConvList();
   if (state.view === "library") renderLibrary();
   renderComposers();
   setView(state.view);
-}
-
-function recentFallbackItems() {
-  return getPromptSource().slice(0, 12).map((prompt, index) => ({
-    id: `sample_${prompt.id}`,
-    prompt: prompt.prompt,
-    title: prompt.title,
-    image: prompt.image,
-    icon: prompt.icon || "ri-image-line",
-    colors: prompt.colors,
-    isSample: true,
-    heightClass: ["tall", "medium", "short", "medium", "tall", "short"][index % 6]
-  }));
-}
-
-function recentHistoryItems() {
-  return state.publicGallery
-    .filter((item) => item.images?.[0])
-    .slice(0, 16)
-    .map((item, index) => ({
-      id: item.id,
-      prompt: item.prompt,
-      title: truncate(item.prompt, 36),
-      image: item.images[0],
-      isSample: false,
-      isPublic: true,
-      heightClass: ["medium", "tall", "short", "medium"][index % 4],
-      time: item.time
-    }));
-}
-
-function renderRecentCreations() {
-  const items = recentHistoryItems();
-  const displayItems = items.length ? items : recentFallbackItems();
-  elements.recentMasonry.innerHTML = displayItems.map((item) => {
-    const visual = item.image
-      ? `<img src="${item.image}" loading="lazy" decoding="async" fetchpriority="low" alt="${escapeHtml(truncate(item.prompt, 80))}">`
-      : `<div class="recent-gradient" style="--art-bg:${item.colors}"><i class="${item.icon}"></i></div>`;
-    return `
-      <button class="recent-tile ${item.heightClass}" type="button" data-recent-id="${escapeHtml(item.id)}">
-        <div class="recent-visual">${visual}</div>
-        <div class="recent-caption">
-          <strong>${escapeHtml(item.title || truncate(item.prompt, 34))}</strong>
-          <span>${escapeHtml(truncate(item.prompt, 76))}</span>
-        </div>
-      </button>
-    `;
-  }).join("");
-
-  $$("[data-recent-id]", elements.recentMasonry).forEach((button) => {
-    button.addEventListener("click", () => {
-      const id = button.dataset.recentId;
-      const item = displayItems.find((entry) => String(entry.id) === id);
-      if (item) openRecentPreview(item);
-    });
-  });
-}
-
-function openRecentPreview(item) {
-  const visual = item.image
-    ? `<img class="preview-image" src="${item.image}" alt="${escapeHtml(truncate(item.prompt, 80))}">`
-    : `<div class="preview-gradient" style="--art-bg:${item.colors}"><i class="${item.icon}"></i></div>`;
-  openModal(`
-    <section class="modal preview-modal">
-      <button class="close-modal" type="button"><i class="ri-close-line"></i></button>
-      ${visual}
-      <div class="preview-body">
-        <h2>${escapeHtml(item.title || text("preview"))}</h2>
-        <p>${escapeHtml(item.prompt)}</p>
-        <div class="message-actions preview-actions">
-          ${item.image ? `<a href="${item.image}" download="${escapeHtml(item.id)}.png"><i class="ri-download-line"></i>${text("download")}</a>` : ""}
-          ${item.image ? `<button type="button" data-preview-editor><i class="ri-magic-line"></i>${text("openEditor")}</button>` : ""}
-          <button type="button" data-preview-use><i class="ri-edit-line"></i>${text("edit")}</button>
-          <button type="button" data-preview-copy><i class="ri-file-copy-line"></i>${text("copy")}</button>
-        </div>
-      </div>
-    </section>
-  `);
-  $("[data-preview-use]", elements.modalLayer).addEventListener("click", () => {
-    closeModal();
-    openWorkspace({ prompt: item.prompt });
-  });
-  $("[data-preview-editor]", elements.modalLayer)?.addEventListener("click", () => {
-    closeModal();
-    openImageEditor(item.image, item.prompt, item.id, item.conversationId || null);
-  });
-  $("[data-preview-copy]", elements.modalLayer).addEventListener("click", async () => {
-    await copyText(item.prompt);
-    showToast(state.lang === "zh" ? "提示词已复制" : "Prompt copied", "ri-file-copy-line");
-  });
 }
 
 function renderComposers() {
@@ -716,6 +594,7 @@ function renderComposers() {
     elements.stickyComposerMount.appendChild(createComposer(true));
   }
   syncComposers();
+  syncReferences();
 }
 
 function createComposer(sticky) {
@@ -741,21 +620,12 @@ function createComposer(sticky) {
   referenceInput.addEventListener("change", async () => {
     const file = referenceInput.files?.[0];
     if (!file) return;
-    await handleEditorUpload(file);
-    state.editor.prompt = textarea.value.trim() || state.editor.prompt;
-    state.editor.sourceGenerationId = null;
-    state.references = [];
-    referenceRow.innerHTML = "";
-    referenceRow.classList.add("hidden");
+    const dataUrl = await blobToDataUrl(file);
+    setComposerReference({ url: dataUrl, imageData: dataUrl, name: file.name, sourceGenerationId: null });
     referenceInput.value = "";
-    openWorkspace({
-      prompt: state.editor.prompt,
-      imageUrl: state.editor.imageUrl,
-      imageData: state.editor.imageData,
-      openEditor: true,
-      sourceGenerationId: null
-    });
-    showToast(state.lang === "zh" ? "已载入图片，进入继续创作模式" : "Image loaded into the editing workspace", "ri-image-add-line");
+    syncReferences(form);
+    openWorkspace({ prompt: textarea.value.trim(), preserveReference: true });
+    showToast(state.lang === "zh" ? "已载入图片，请描述你想修改的内容" : "Image attached. Describe how you want to modify it.", "ri-image-add-line");
   });
   optionsToggle.addEventListener("click", () => {
     advanced.classList.toggle("hidden");
@@ -823,6 +693,18 @@ function syncComposers(sourceForm) {
     }
     updateCustomSizeVisibility(form);
     $(".model-label", form).textContent = "gpt-image-2";
+    const isImageEdit = state.references.length > 0;
+    const actionText = isImageEdit
+      ? (state.lang === "zh" ? "修改" : "Edit")
+      : text("create");
+    const submitLabel = $(".send-button span", form);
+    if (submitLabel) submitLabel.textContent = actionText;
+    const qualityInput = $(".quality-input", form);
+    const backgroundInput = $(".background-input", form);
+    const formatInput = $(".format-input", form);
+    if (qualityInput) qualityInput.disabled = isImageEdit;
+    if (backgroundInput) backgroundInput.disabled = isImageEdit;
+    if (formatInput) formatInput.disabled = isImageEdit;
     $(".send-button", form).disabled = state.generating || !state.settings?.hasApiKey;
   });
 }
@@ -837,10 +719,9 @@ function renderReferences(row) {
   row.classList.toggle("hidden", state.references.length === 0);
   $$("[data-remove-reference]", row).forEach((button) => {
     button.addEventListener("click", () => {
-      const index = Number(button.dataset.removeReference);
-      const [removed] = state.references.splice(index, 1);
-      if (removed?.url) URL.revokeObjectURL(removed.url);
+      clearComposerReferences();
       $$(".reference-row").forEach(renderReferences);
+      syncComposers();
     });
   });
 }
@@ -854,13 +735,25 @@ function syncReferences(sourceForm) {
 async function submitGeneration(form) {
   const prompt = $(".prompt-box", form).value.trim();
   if (!prompt) return;
+  const attachedReference = state.references[0] || null;
+  const isImageEdit = Boolean(attachedReference?.url);
   if (!state.user) {
     state.draftPrompt = prompt;
-    state.pendingAction = {
-      type: "generate",
-      prompt,
-      conversationId: state.activeConversationId || null
-    };
+    state.pendingAction = isImageEdit
+      ? {
+          type: "edit",
+          prompt,
+          imageUrl: attachedReference.url,
+          imageData: attachedReference.imageData || "",
+          sourceGenerationId: attachedReference.sourceGenerationId || null,
+          conversationId: attachedReference.conversationId || state.activeConversationId || null,
+          isPublic: state.publishToSquare
+        }
+      : {
+          type: "generate",
+          prompt,
+          conversationId: state.activeConversationId || null
+        };
     openAuthModal("login");
     return;
   }
@@ -877,8 +770,8 @@ async function submitGeneration(form) {
   const item = {
     id: tempId,
     conversationId: state.activeConversationId,
-    operationType: "generate",
-    sourceGenerationId: null,
+    operationType: isImageEdit ? "edit" : "generate",
+    sourceGenerationId: attachedReference?.sourceGenerationId || null,
     prompt,
     images: [],
     status: "generating",
@@ -889,28 +782,39 @@ async function submitGeneration(form) {
   };
   state.history.push(item);
   state.generating = true;
-  state.references = [];
-  setWorkspaceMode("create");
   startFunMessages();
   renderAll();
   setView("workspace");
   scrollToBottom();
 
   try {
-    const data = await api("/api/images/generate", {
-      method: "POST",
-      body: JSON.stringify({
-        prompt,
-        size: item.options.size,
-        quality: item.options.quality,
-        background: item.options.background,
-        outputFormat: item.options.outputFormat,
-        isPublic: item.isPublic,
-        conversationId: state.activeConversationId,
-        sourceGenerationId: null,
-        n: 1
-      })
-    });
+    const data = isImageEdit
+      ? await api("/api/images/edit", {
+          method: "POST",
+          body: JSON.stringify({
+            prompt,
+            imageData: attachedReference.imageData || await imageReferenceForEdit(attachedReference.url),
+            maskData: "",
+            size: item.options.size,
+            isPublic: item.isPublic,
+            conversationId: attachedReference.conversationId || state.activeConversationId,
+            sourceGenerationId: attachedReference.sourceGenerationId || null
+          })
+        })
+      : await api("/api/images/generate", {
+          method: "POST",
+          body: JSON.stringify({
+            prompt,
+            size: item.options.size,
+            quality: item.options.quality,
+            background: item.options.background,
+            outputFormat: item.options.outputFormat,
+            isPublic: item.isPublic,
+            conversationId: state.activeConversationId,
+            sourceGenerationId: null,
+            n: 1
+          })
+        });
     const generation = historyItemFromGeneration(data.generations[0]);
     state.activeConversationId = data.conversationId || state.activeConversationId;
     state.history = state.history.map((entry) =>
@@ -922,7 +826,18 @@ async function submitGeneration(form) {
     updateDailyMetric();
     await loadConversations();
     if (item.isPublic) await loadPublicGallery();
-    showToast(state.lang === "zh" ? "已生成" : "Created", "ri-sparkling-2-fill");
+    if (isImageEdit) {
+      setComposerReference({
+        url: generation.images[0],
+        name: `generation-${generation.id}`,
+        sourceGenerationId: generation.id,
+        conversationId: generation.conversationId || state.activeConversationId || null
+      });
+      showToast(state.lang === "zh" ? "已更新图片，可继续修改" : "Image updated. You can keep iterating.", "ri-magic-line");
+    } else {
+      clearComposerReferences();
+      showToast(state.lang === "zh" ? "已生成" : "Created", "ri-sparkling-2-fill");
+    }
   } catch (error) {
     state.history = state.history.map((entry) =>
       entry.id === tempId ? { ...entry, status: "error", error: error.message } : entry
@@ -1009,9 +924,9 @@ function renderHistory() {
   if (!state.history.length) {
     elements.historyList.innerHTML = `
       <section class="workspace-empty-state">
-        <span class="config-chip">${escapeHtml(state.activeConversationId ? "继续创作" : "新建会话")}</span>
-        <h2>${escapeHtml(state.lang === "zh" ? "在同一条会话里持续改图" : "Keep iterating in one thread")}</h2>
-        <p>${escapeHtml(state.lang === "zh" ? "输入提示词开始文生图，或直接上传一张图片进入继续创作模式。" : "Start with a prompt or upload an image to continue creating in the same thread.")}</p>
+        <span class="config-chip">${escapeHtml(state.lang === "zh" ? "图片创作工作区" : "Image creation workspace")}</span>
+        <h2>${escapeHtml(state.lang === "zh" ? "描述需求，开始生成或继续修改图片" : "Describe what you need and generate or refine images")}</h2>
+        <p>${escapeHtml(state.lang === "zh" ? "支持文生图，也支持直接上传现有图片继续修改，适合商品图、海报图和详情页素材的连续迭代。" : "Generate from text or upload an existing image to keep refining product shots, posters, and marketing assets in one thread.")}</p>
       </section>
     `;
     return;
@@ -1060,8 +975,9 @@ function renderHistory() {
   $$("[data-retry]", elements.historyList).forEach((button) => {
     button.addEventListener("click", () => {
       state.draftPrompt = button.dataset.retry;
-      setWorkspaceMode("create");
+      clearComposerReferences();
       syncComposers();
+      syncReferences();
       const form = $(".composer", elements.stickyComposerMount);
       submitGeneration(form);
     });
@@ -1069,15 +985,16 @@ function renderHistory() {
   $$("[data-edit]", elements.historyList).forEach((button) => {
     button.addEventListener("click", () => {
       state.draftPrompt = button.dataset.edit;
-      setWorkspaceMode("create");
+      clearComposerReferences();
       syncComposers();
+      syncReferences();
       $(".prompt-box", $(".composer", elements.stickyComposerMount) || document)?.focus();
     });
   });
   $$("[data-edit-image]", elements.historyList).forEach((button) => {
     button.addEventListener("click", () => {
       const item = state.history.find((entry) => String(entry.id) === button.dataset.editImage);
-      if (item?.images?.[0]) openImageEditor(item.images[0], item.prompt, item.id, item.conversationId || null);
+      if (item?.images?.[0]) openImageEditor(item.images[0], item.id, item.conversationId || null);
     });
   });
 }
@@ -1193,7 +1110,7 @@ function bindPromptCards(root) {
   });
 }
 
-async function openImageEditor(imageUrl = "", prompt = "", sourceGenerationId = "", conversationId = null) {
+async function openImageEditor(imageUrl = "", sourceGenerationId = "", conversationId = null) {
   if (conversationId && conversationId !== state.activeConversationId) {
     const switched = await switchToConversation(conversationId);
     if (!switched) return;
@@ -1201,160 +1118,14 @@ async function openImageEditor(imageUrl = "", prompt = "", sourceGenerationId = 
     state.activeConversationId = null;
     state.history = [];
   }
-  state.editor.prompt = prompt || state.editor.prompt;
-  state.editor.sourceGenerationId = sourceGenerationId || null;
-  if (imageUrl) setEditorImage(imageUrl, "", sourceGenerationId || null);
-  openWorkspace({ prompt: state.editor.prompt, openEditor: true, sourceGenerationId });
-}
-
-function renderEditor() {
-  if (!elements.editorView) return;
-  $$("[data-editor-tool]", elements.editorView).forEach((button) => {
-    button.classList.toggle("active", button.dataset.editorTool === state.editor.tool);
+  setComposerReference({
+    url: imageUrl,
+    name: sourceGenerationId ? `generation-${sourceGenerationId}` : "conversation-image",
+    sourceGenerationId: sourceGenerationId || null,
+    conversationId: conversationId || state.activeConversationId || null
   });
-  if (document.activeElement !== elements.editorPromptInput) {
-    elements.editorPromptInput.value = state.editor.prompt || "";
-  }
-  elements.editorColorInput.value = state.editor.color;
-  elements.editorUploadCard.classList.toggle("hidden", Boolean(state.editor.imageUrl));
-  elements.editorImageFrame.classList.toggle("hidden", !state.editor.imageUrl);
-  elements.editorZoomText.textContent = `${Math.round(state.editor.zoom * 100)}%`;
-  elements.editorImageScaler.style.transform = `scale(${state.editor.zoom})`;
-  if (state.editor.imageUrl && elements.editorSourceImage.getAttribute("src") !== state.editor.imageUrl) {
-    elements.editorSourceImage.src = state.editor.imageUrl;
-  }
-}
-
-function setEditorImage(src, imageData = "", sourceGenerationId = null) {
-  state.editor.imageUrl = src;
-  state.editor.imageData = imageData || (src.startsWith("data:") ? src : "");
-  state.editor.sourceGenerationId = sourceGenerationId || null;
-  state.editor.zoom = 1;
-  state.editor.history = [];
-  renderEditor();
-}
-
-function resetEditorCanvas() {
-  const image = elements.editorSourceImage;
-  const canvas = elements.editorMaskCanvas;
-  if (!image?.naturalWidth || !canvas) return;
-  canvas.width = image.naturalWidth;
-  canvas.height = image.naturalHeight;
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  state.editor.history = [canvas.toDataURL("image/png")];
-}
-
-function editorPoint(event) {
-  const canvas = elements.editorMaskCanvas;
-  const rect = canvas.getBoundingClientRect();
-  return {
-    x: (event.clientX - rect.left) * (canvas.width / rect.width),
-    y: (event.clientY - rect.top) * (canvas.height / rect.height)
-  };
-}
-
-function pushEditorHistory() {
-  const canvas = elements.editorMaskCanvas;
-  state.editor.history.push(canvas.toDataURL("image/png"));
-  if (state.editor.history.length > 20) state.editor.history.shift();
-}
-
-function restoreEditorHistory(dataUrl) {
-  const canvas = elements.editorMaskCanvas;
-  const ctx = canvas.getContext("2d");
-  const image = new Image();
-  image.onload = () => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(image, 0, 0);
-  };
-  image.src = dataUrl;
-}
-
-function editorPointerDown(event) {
-  if (!state.editor.imageUrl || state.editor.tool === "move") return;
-  event.preventDefault();
-  const canvas = elements.editorMaskCanvas;
-  const ctx = canvas.getContext("2d");
-  const point = editorPoint(event);
-  state.editor.pointerDown = true;
-  state.editor.startPoint = point;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  if (state.editor.tool === "eraser") {
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.lineWidth = 34 / state.editor.zoom;
-    ctx.beginPath();
-    ctx.moveTo(point.x, point.y);
-  } else if (state.editor.tool === "rect") {
-    state.editor.snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  } else {
-    ctx.globalCompositeOperation = "source-over";
-    ctx.strokeStyle = hexToRgba(state.editor.color, 0.72);
-    ctx.lineWidth = 18 / state.editor.zoom;
-    ctx.beginPath();
-    ctx.moveTo(point.x, point.y);
-  }
-}
-
-function editorPointerMove(event) {
-  if (!state.editor.pointerDown) return;
-  event.preventDefault();
-  const canvas = elements.editorMaskCanvas;
-  const ctx = canvas.getContext("2d");
-  const point = editorPoint(event);
-  if (state.editor.tool === "rect" && state.editor.snapshot) {
-    ctx.putImageData(state.editor.snapshot, 0, 0);
-    ctx.globalCompositeOperation = "source-over";
-    ctx.strokeStyle = hexToRgba(state.editor.color, 0.78);
-    ctx.lineWidth = 8 / state.editor.zoom;
-    ctx.strokeRect(
-      state.editor.startPoint.x,
-      state.editor.startPoint.y,
-      point.x - state.editor.startPoint.x,
-      point.y - state.editor.startPoint.y
-    );
-  } else {
-    ctx.lineTo(point.x, point.y);
-    ctx.stroke();
-  }
-}
-
-function editorPointerUp() {
-  if (!state.editor.pointerDown) return;
-  const ctx = elements.editorMaskCanvas.getContext("2d");
-  ctx.closePath();
-  ctx.globalCompositeOperation = "source-over";
-  state.editor.pointerDown = false;
-  state.editor.snapshot = null;
-  pushEditorHistory();
-}
-
-function undoEditorMark() {
-  if (state.editor.history.length <= 1) return;
-  state.editor.history.pop();
-  restoreEditorHistory(state.editor.history[state.editor.history.length - 1]);
-}
-
-function zoomEditor(direction) {
-  const factor = direction === "+" ? 1.12 : 0.88;
-  state.editor.zoom = Math.max(0.25, Math.min(3, state.editor.zoom * factor));
-  renderEditor();
-}
-
-function hexToRgba(hex, alpha) {
-  const raw = hex.replace("#", "");
-  const bigint = Number.parseInt(raw.length === 3 ? raw.split("").map((c) => c + c).join("") : raw, 16);
-  const r = (bigint >> 16) & 255;
-  const g = (bigint >> 8) & 255;
-  const b = bigint & 255;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-async function handleEditorUpload(file) {
-  if (!file) return;
-  const dataUrl = await blobToDataUrl(file);
-  setEditorImage(dataUrl, dataUrl);
+  openWorkspace({ prompt: "", imageUrl, sourceGenerationId, conversationId });
+  showToast(state.lang === "zh" ? "已选中图片，请在输入框描述修改需求" : "Image selected. Describe the changes in the composer.", "ri-magic-line");
 }
 
 function blobToDataUrl(blob) {
@@ -1375,109 +1146,6 @@ async function imageReferenceForEdit(src) {
     return await blobToDataUrl(await response.blob());
   } catch {
     return src;
-  }
-}
-
-function loadImageElement(src) {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = reject;
-    image.src = src;
-  });
-}
-
-async function editorAnnotatedImageData(originalData) {
-  const maskCanvas = elements.editorMaskCanvas;
-  if (!canvasHasMarks(maskCanvas)) return { imageData: originalData, maskData: "" };
-  const originalImage = await loadImageElement(originalData);
-  const canvas = document.createElement("canvas");
-  canvas.width = originalImage.naturalWidth || originalImage.width;
-  canvas.height = originalImage.naturalHeight || originalImage.height;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(originalImage, 0, 0, canvas.width, canvas.height);
-  ctx.drawImage(maskCanvas, 0, 0, canvas.width, canvas.height);
-  return {
-    imageData: canvas.toDataURL("image/png"),
-    maskData: maskCanvas.toDataURL("image/png")
-  };
-}
-
-function canvasHasMarks(canvas) {
-  if (!canvas?.width || !canvas.height) return false;
-  const ctx = canvas.getContext("2d");
-  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-  for (let index = 3; index < data.length; index += 4) {
-    if (data[index] > 0) return true;
-  }
-  return false;
-}
-
-async function submitImageEdit(event) {
-  event.preventDefault();
-  if (!state.user) {
-    state.pendingAction = {
-      type: "edit",
-      prompt: elements.editorPromptInput.value.trim(),
-      imageUrl: state.editor.imageUrl,
-      imageData: state.editor.imageData,
-      sourceGenerationId: state.editor.sourceGenerationId,
-      conversationId: state.activeConversationId || null,
-      isPublic: elements.editorPublicInput.checked
-    };
-    openAuthModal("login");
-    return;
-  }
-  if (!state.settings?.hasApiKey) {
-    showToast(state.lang === "zh" ? "请先在后台配置 OpenAI API Key" : "Configure the OpenAI API key first", "ri-key-2-line");
-    return;
-  }
-  const prompt = elements.editorPromptInput.value.trim();
-  if (!state.editor.imageUrl) {
-    showToast(state.lang === "zh" ? "请先上传或选择一张图片" : "Choose an image first", "ri-image-add-line");
-    return;
-  }
-  if (prompt.length < 3) {
-    showToast(state.lang === "zh" ? "请输入编辑描述" : "Enter an edit prompt", "ri-edit-line");
-    return;
-  }
-
-  const button = $("button[type='submit']", elements.editorPromptForm);
-  button.disabled = true;
-  state.editor.prompt = prompt;
-  try {
-    const originalData = state.editor.imageData || await imageReferenceForEdit(state.editor.imageUrl);
-    const { imageData, maskData } = await editorAnnotatedImageData(originalData);
-    const data = await api("/api/images/edit", {
-      method: "POST",
-      body: JSON.stringify({
-        prompt: maskData
-          ? `${prompt}。只修改图片中紫色标记框或紫色笔刷覆盖的区域，其他区域保持不变，最终结果不要保留紫色标记。`
-          : prompt,
-        imageData,
-        maskData,
-        size: state.generationOptions.size,
-        isPublic: elements.editorPublicInput.checked,
-        conversationId: state.activeConversationId,
-        sourceGenerationId: state.editor.sourceGenerationId
-      })
-    });
-    const generation = historyItemFromGeneration(data.generations[0]);
-    state.activeConversationId = data.conversationId || state.activeConversationId;
-    state.user.credits = data.credits;
-    state.stats.todayGenerated += 1;
-    state.history.push(generation);
-    state.allGenerations = [generation, ...state.allGenerations.filter((entry) => entry.id !== generation.id)];
-    setEditorImage(generation.images[0], "", generation.id);
-    await loadConversations();
-    if (generation.isPublic) await loadPublicGallery();
-    renderAll();
-    showToast(state.lang === "zh" ? "编辑完成" : "Edit created", "ri-magic-line");
-  } catch (error) {
-    if (/credit|额度|积分|Not enough/i.test(error.message)) openCreditsModal();
-    else showToast(error.message, "ri-error-warning-line");
-  } finally {
-    button.disabled = false;
   }
 }
 
@@ -1734,7 +1402,7 @@ async function loadMyWorks(forceReload = false) {
       const item = state.allGenerations.find((entry) => String(entry.id) === button.dataset.workEditor);
       if (!item?.images?.[0]) return;
       closeModal();
-      openImageEditor(item.images[0], item.prompt, item.id, item.conversationId || null);
+      openImageEditor(item.images[0], item.id, item.conversationId || null);
     });
   });
 }
@@ -1848,14 +1516,14 @@ async function submitAuth(event) {
       const pending = state.pendingAction;
       state.pendingAction = null;
       if (pending.conversationId) state.activeConversationId = pending.conversationId;
+      state.publishToSquare = Boolean(pending.isPublic);
       openWorkspace({
         prompt: pending.prompt,
         imageUrl: pending.imageUrl,
         imageData: pending.imageData,
-        openEditor: true,
-        sourceGenerationId: pending.sourceGenerationId || null
+        sourceGenerationId: pending.sourceGenerationId || null,
+        conversationId: pending.conversationId || null
       });
-      elements.editorPublicInput.checked = Boolean(pending.isPublic);
     } else if (state.pendingAction?.type === "generate") {
       const pending = state.pendingAction;
       state.pendingAction = null;
@@ -1884,7 +1552,15 @@ async function logout() {
   state.allGenerations = [];
   state.activeConversationId = null;
   state.pendingAction = null;
-  state.workspaceMode = "create";
+  state.draftPrompt = "";
+  state.publishToSquare = false;
+  state.generationOptions = {
+    size: "auto",
+    quality: "auto",
+    background: "auto",
+    outputFormat: "png"
+  };
+  clearComposerReferences();
   state.checkin = { checkedInToday: false, credit: state.settings?.checkinCredit || 1 };
   renderAll();
   setView("landing");
@@ -2266,10 +1942,6 @@ function bindGlobalEvents() {
   elements.startCreateBtn?.addEventListener("click", () => openWorkspace());
   elements.workspaceNewBtn?.addEventListener("click", startNewConversation);
   elements.promptLibraryBtn.addEventListener("click", () => setView("library"));
-  elements.imageEditorBtn.addEventListener("click", () => {
-    resetEditorWorkspace();
-    openWorkspace({ openEditor: true });
-  });
   elements.openLibraryInlineBtn.addEventListener("click", () => setView("library"));
   elements.langBtn.addEventListener("click", () => {
     state.lang = state.lang === "zh" ? "en" : "zh";
@@ -2286,31 +1958,6 @@ function bindGlobalEvents() {
     state.promptVisible = 20;
     renderLibrary();
   });
-  $("[data-editor-home]", elements.editorView)?.addEventListener("click", () => setWorkspaceMode("create"));
-  $("[data-editor-create]", elements.editorView)?.addEventListener("click", () => setWorkspaceMode("create"));
-  $$("[data-editor-tool]", elements.editorView).forEach((button) => {
-    button.addEventListener("click", () => {
-      state.editor.tool = button.dataset.editorTool;
-      renderEditor();
-    });
-  });
-  $("[data-editor-undo]", elements.editorView)?.addEventListener("click", undoEditorMark);
-  $$("[data-editor-zoom]", elements.editorView).forEach((button) => {
-    button.addEventListener("click", () => zoomEditor(button.dataset.editorZoom));
-  });
-  elements.editorColorInput.addEventListener("input", () => {
-    state.editor.color = elements.editorColorInput.value;
-  });
-  elements.editorPromptInput.addEventListener("input", () => {
-    state.editor.prompt = elements.editorPromptInput.value;
-  });
-  elements.editorUploadInput.addEventListener("change", (event) => handleEditorUpload(event.target.files?.[0]));
-  elements.editorBottomUploadInput.addEventListener("change", (event) => handleEditorUpload(event.target.files?.[0]));
-  elements.editorSourceImage.addEventListener("load", resetEditorCanvas);
-  elements.editorMaskCanvas.addEventListener("pointerdown", editorPointerDown);
-  elements.editorMaskCanvas.addEventListener("pointermove", editorPointerMove);
-  window.addEventListener("pointerup", editorPointerUp);
-  elements.editorPromptForm.addEventListener("submit", submitImageEdit);
 }
 
 bindGlobalEvents();
@@ -2347,8 +1994,7 @@ function startNewConversation() {
   state.history = [];
   state.draftPrompt = "";
   state.pendingAction = null;
-  state.workspaceMode = "create";
-  resetEditorWorkspace();
+  clearComposerReferences();
   renderAll();
   closeConvSidebar();
   openWorkspace();
@@ -2392,7 +2038,8 @@ function bindConversationListEvents(root) {
         if (state.activeConversationId === btn.dataset.delConv) {
           state.activeConversationId = null;
           state.history = [];
-          state.workspaceMode = "create";
+          state.draftPrompt = "";
+          clearComposerReferences();
           renderAll();
         }
         await loadConversations();
@@ -2453,7 +2100,8 @@ async function switchToConversation(convId) {
     const data = await api(`/api/conversations/${convId}`);
     state.activeConversationId = convId;
     state.history = (data.messages || []).map(historyItemFromGeneration);
-    state.workspaceMode = "create";
+    state.draftPrompt = "";
+    clearComposerReferences();
     renderAll();
     setView("workspace");
     scrollToBottom();
