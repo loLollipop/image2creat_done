@@ -13,6 +13,14 @@ const state = {
   transactions: [],
   payments: [],
   accounts: [],
+  accountsView: {
+    search: "",
+    typeFilter: "all",
+    statusFilter: "all",
+    page: 1,
+    pageSize: 10,
+    selected: new Set()
+  },
   logs: [],
   logsError: "",
   logsFilter: { type: "", start_date: "", end_date: "" },
@@ -206,18 +214,44 @@ function renderRegisterStatsCards(reg) {
   `;
 }
 
+function formatRegisterLogTime(value) {
+  const raw = String(value || "");
+  if (!raw) return "";
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    try { return parsed.toLocaleTimeString("zh-CN", { hour12: false }); }
+    catch (_) { /* fall through */ }
+  }
+  return raw.replace(/T/, " ").slice(0, 19);
+}
+
 function renderRegisterLogsBlock(reg) {
-  const logs = Array.isArray(reg.logs) ? reg.logs : [];
-  if (!logs.length) return "";
+  const logs = Array.isArray(reg?.logs) ? reg.logs : [];
+  const rows = logs.length
+    ? logs.slice().reverse().map((entry) => {
+        const level = String(entry.level || "");
+        const cls = level === "red"
+          ? "color:#e11d48"
+          : level === "green"
+            ? "color:#059669"
+            : level === "yellow"
+              ? "color:#d97706"
+              : "color:#475569";
+        const time = formatRegisterLogTime(entry.time || entry.ts);
+        return `<div style="${cls}"><span style="color:#94a3b8">${escapeHtml(time)}</span><span style="padding-left:8px">${escapeHtml(String(entry.text || ""))}</span></div>`;
+      }).join("")
+    : `<div class="muted">暂无日志。注册机启动后这里会持续输出每个账号的注册进度。</div>`;
   return `
-    <div style="margin-top:14px">
-      <strong>注册日志</strong><span class="muted"> (最近 ${logs.length} 条)</span>
-      <div style="max-height:280px;overflow-y:auto;margin-top:6px;border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:10px;font-family:monospace;font-size:12px;line-height:1.8;background:var(--surface,#f8fafc)">
-        ${logs.slice().reverse().map((e) => {
-          const lvl = String(e.level || "");
-          const cls = lvl === "red" ? "color:#e11d48" : lvl === "green" ? "color:#059669" : lvl === "yellow" ? "color:#d97706" : "color:var(--text-muted,#64748b)";
-          return `<div style="${cls}"><span style="color:var(--text-muted,#94a3b8)">${escapeHtml(String(e.time || e.ts || "").replace(/T/, " ").slice(0, 19))}</span> ${escapeHtml(String(e.text || ""))}</div>`;
-        }).join("")}
+    <div class="register-logs" style="margin-top:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+        <div>
+          <strong>实时日志</strong>
+          <span class="muted" style="margin-left:8px;font-size:12px">遇到 HTTP 400 等错误通常是邮箱被封，请更换 provider 的域名。</span>
+        </div>
+        <span class="status">${logs.length}</span>
+      </div>
+      <div style="max-height:320px;overflow-y:auto;border:1px solid var(--line,#e2e8f0);border-radius:10px;padding:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.8;background:#f8fafc">
+        ${rows}
       </div>
     </div>
   `;
@@ -382,82 +416,376 @@ function logTypeLabel(type) { return LOG_TYPE_LABELS[type] || type || "-"; }
 // ===================== Accounts (号池) =====================
 
 const ACCOUNT_STATUSES = ["正常", "限流", "异常", "禁用"];
+const ACCOUNT_TYPE_LABELS = { pro: "Pro", prolite: "Pro Lite", plus: "Plus", free: "Free" };
+const ACCOUNT_TYPE_OPTIONS = ["free", "plus", "pro", "prolite"];
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+
 function accountStatusClass(status) {
-  if (status === "正常") return "";
+  if (status === "正常") return "ok";
   if (status === "限流") return "warn";
+  if (status === "禁用") return "muted";
   return "failed";
 }
 function tokenPreview(token) {
   const value = String(token || "");
-  if (value.length <= 14) return value;
-  return `${value.slice(0, 6)}…${value.slice(-6)}`;
+  if (value.length <= 18) return value;
+  return `${value.slice(0, 12)}…${value.slice(-8)}`;
+}
+function displayAccountType(account) {
+  const raw = String(account?.type || "").toLowerCase() || "free";
+  return ACCOUNT_TYPE_LABELS[raw] || raw;
+}
+function accountTypeKey(account) {
+  return String(account?.type || "free").toLowerCase() || "free";
+}
+function isUnlimitedQuotaAccount(account) {
+  const t = accountTypeKey(account);
+  return t === "pro" || t === "prolite";
+}
+function quotaDisplay(account) {
+  if (isUnlimitedQuotaAccount(account)) return "∞";
+  if (account?.image_quota_unknown) return "未知";
+  return String(Math.max(0, Number(account?.quota || 0)));
+}
+function quotaSummary(items) {
+  const available = items.filter((it) => it.status === "正常");
+  if (available.some(isUnlimitedQuotaAccount)) return "∞";
+  if (available.some((it) => it.image_quota_unknown)) return "未知";
+  const total = available.reduce((sum, it) => sum + Math.max(0, Number(it.quota || 0)), 0);
+  return total >= 1000 ? `${(total / 1000).toFixed(1)}k` : String(total);
+}
+function formatRestoreAt(value) {
+  if (!value) return { absolute: "—", relative: "" };
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return { absolute: String(value), relative: "" };
+  const diffMs = Math.max(0, date.getTime() - Date.now());
+  const totalHours = Math.ceil(diffMs / 3600000);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  const relative = diffMs > 0 ? `剩余 ${days}d ${hours}h` : "已到恢复时间";
+  const pad = (n) => String(n).padStart(2, "0");
+  const absolute = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return { absolute, relative };
+}
+function accountsViewState() {
+  if (!state.accountsView) {
+    state.accountsView = { search: "", typeFilter: "all", statusFilter: "all", page: 1, pageSize: 10, selected: new Set() };
+  }
+  if (!(state.accountsView.selected instanceof Set)) {
+    state.accountsView.selected = new Set(state.accountsView.selected || []);
+  }
+  return state.accountsView;
+}
+function reconcileAccountsSelection() {
+  const view = accountsViewState();
+  const live = new Set((state.accounts || []).map((a) => a.access_token).filter(Boolean));
+  for (const tok of [...view.selected]) {
+    if (!live.has(tok)) view.selected.delete(tok);
+  }
+}
+function filteredAccounts() {
+  const view = accountsViewState();
+  const items = state.accounts || [];
+  const q = view.search.trim().toLowerCase();
+  return items.filter((acc) => {
+    if (q && !String(acc.email || "").toLowerCase().includes(q)) return false;
+    if (view.typeFilter !== "all" && accountTypeKey(acc) !== view.typeFilter) return false;
+    if (view.statusFilter !== "all" && String(acc.status || "正常") !== view.statusFilter) return false;
+    return true;
+  });
+}
+function accountStatsBuckets(items) {
+  const total = items.length;
+  let active = 0, limited = 0, abnormal = 0, disabled = 0;
+  for (const it of items) {
+    const s = String(it.status || "正常");
+    if (s === "正常") active++;
+    else if (s === "限流") limited++;
+    else if (s === "异常") abnormal++;
+    else if (s === "禁用") disabled++;
+  }
+  return { total, active, limited, abnormal, disabled, quota: quotaSummary(items) };
+}
+function availableAccountTypes(items) {
+  const set = new Set();
+  for (const it of items) set.add(accountTypeKey(it));
+  return [...set];
+}
+function downloadAccountTokens(items) {
+  const tokens = items.map((a) => a.access_token).filter(Boolean);
+  if (!tokens.length) { toast("没有可导出的 token"); return; }
+  const blob = new Blob([tokens.join("\n") + "\n"], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `accounts-${Date.now()}.txt`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function renderAccounts() {
-  const items = state.accounts || [];
-  const target = UPSTREAM_VIEWS.includes(state.view) ? ($("#upstreamPanel") || $("#panel")) : $("#panel");
-  target.innerHTML = `
-    <div class="card">
-      <div class="upstream-header">
-        <div><h2>号池</h2><p class="muted">管理 chatgpt2api 的 ChatGPT 账号池。</p></div>
-        <div class="upstream-header-actions">
-          <button class="secondary" type="button" id="accountsRefreshBtn">刷新状态</button>
-          <button class="primary" type="button" id="accountsAddBtn">添加账号</button>
-        </div>
-      </div>
-      <div class="table-wrap">
-        ${items.length ? `
-          <table>
-            <thead><tr><th>账号</th><th>状态</th><th>access_token</th><th>配额</th><th>已用</th><th>上次刷新</th><th></th></tr></thead>
-            <tbody>
-              ${items.map((account) => `
-                <tr data-token="${escapeHtml(account.access_token || "")}">
-                  <td><strong>${escapeHtml(account.email || account.name || "-")}</strong></td>
-                  <td><span class="status ${accountStatusClass(String(account.status || ""))}">${escapeHtml(String(account.status || "-"))}</span></td>
-                  <td><code>${escapeHtml(tokenPreview(account.access_token))}</code></td>
-                  <td>${account.quota ?? "-"}</td>
-                  <td>${account.used ?? "-"}</td>
-                  <td>${fmt(account.last_renewal_at || account.updated_at || account.created_at)}</td>
-                  <td>
-                    <button class="secondary" data-action="refresh" type="button">刷新</button>
-                    <button class="secondary" data-action="edit" type="button">编辑</button>
-                    <button class="secondary" data-action="delete" type="button">删除</button>
-                  </td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        ` : `<div class="empty">号池暂无账号。</div>`}
+function renderAccountsStats() {
+  const stats = accountStatsBuckets(state.accounts || []);
+  const host = $("#acctStats");
+  if (!host) return;
+  const cards = [
+    { key: "total", label: "账户总数", value: stats.total, tone: "ink" },
+    { key: "active", label: "正常账户", value: stats.active, tone: "ok" },
+    { key: "limited", label: "限流账户", value: stats.limited, tone: "warn" },
+    { key: "abnormal", label: "异常账户", value: stats.abnormal, tone: "danger" },
+    { key: "disabled", label: "禁用账户", value: stats.disabled, tone: "muted" },
+    { key: "quota", label: "剩余额度", value: stats.quota, tone: "info" }
+  ];
+  host.innerHTML = cards.map((c) => `
+    <div class="account-stat-card tone-${c.tone}">
+      <div class="label">${c.label}</div>
+      <div class="value">${escapeHtml(String(c.value))}</div>
+    </div>
+  `).join("");
+}
+
+function renderAccountsBulkbar() {
+  const view = accountsViewState();
+  const host = $("#acctBulkbar");
+  if (!host) return;
+  const count = view.selected.size;
+  if (count === 0) { host.innerHTML = ""; return; }
+  host.innerHTML = `
+    <div class="account-bulkbar">
+      <div>已选 <strong>${count}</strong> 个账号</div>
+      <div class="account-bulkbar-actions">
+        <button class="secondary" type="button" id="acctBulkRefresh">刷新选中</button>
+        <button class="secondary" type="button" id="acctBulkRemoveAbnormal">移除异常账号</button>
+        <button class="secondary" type="button" id="acctBulkClear">取消选择</button>
+        <button class="primary" type="button" id="acctBulkDelete">删除选中</button>
       </div>
     </div>
   `;
-  $("#accountsRefreshBtn").addEventListener("click", () => refreshAccounts());
-  $("#accountsAddBtn").addEventListener("click", () => openAddAccountDialog());
-  $$("tr[data-token]").forEach((row) => {
+  $("#acctBulkRefresh", host).addEventListener("click", () => refreshAccounts([...view.selected]));
+  $("#acctBulkRemoveAbnormal", host).addEventListener("click", () => removeAbnormalSelected());
+  $("#acctBulkClear", host).addEventListener("click", () => { view.selected.clear(); patchAccountsView(); });
+  $("#acctBulkDelete", host).addEventListener("click", () => deleteAccounts([...view.selected]));
+}
+
+function renderAccountsTable() {
+  const view = accountsViewState();
+  const host = $("#acctTableHost");
+  if (!host) return;
+  const all = filteredAccounts();
+  const total = all.length;
+  const pageSize = Math.max(1, Number(view.pageSize) || 10);
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  if (view.page > pageCount) view.page = pageCount;
+  const start = (view.page - 1) * pageSize;
+  const rows = all.slice(start, start + pageSize);
+  const allSelected = rows.length > 0 && rows.every((r) => view.selected.has(r.access_token));
+
+  if (!total) {
+    host.innerHTML = `<div class="empty">${(state.accounts || []).length ? "没有匹配筛选条件的账号。" : "号池暂无账号。点击右上角“新增”导入 token。"}</div>`;
+    return;
+  }
+
+  host.innerHTML = `
+    <div class="table-wrap account-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:36px"><input type="checkbox" id="acctSelectAll" ${allSelected ? "checked" : ""}></th>
+            <th>Token</th>
+            <th>类型</th>
+            <th>状态</th>
+            <th>账号信息</th>
+            <th style="text-align:right">额度</th>
+            <th>恢复时间</th>
+            <th style="text-align:right">成功</th>
+            <th style="text-align:right">失败</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((acc) => {
+            const token = acc.access_token || "";
+            const checked = view.selected.has(token) ? "checked" : "";
+            const statusCls = accountStatusClass(String(acc.status || ""));
+            const typeKey = accountTypeKey(acc);
+            const restore = formatRestoreAt(acc.restore_at);
+            const isPro = typeKey === "pro" || typeKey === "prolite";
+            return `
+              <tr data-token="${escapeHtml(token)}">
+                <td><input type="checkbox" class="acct-row-check" data-token="${escapeHtml(token)}" ${checked}></td>
+                <td><code class="token-cell" title="${escapeHtml(token)}">${escapeHtml(tokenPreview(token))}</code></td>
+                <td><span class="type-badge type-${typeKey}">${escapeHtml(displayAccountType(acc))}</span></td>
+                <td><span class="status ${statusCls}">${escapeHtml(String(acc.status || "-"))}</span></td>
+                <td><div>${escapeHtml(String(acc.email || "-"))}</div></td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums">${escapeHtml(quotaDisplay(acc))}${isPro ? "" : ""}</td>
+                <td>${restore.absolute === "—" ? `<span class="muted">—</span>` : `<div>${escapeHtml(restore.absolute)}</div><div class="muted" style="font-size:11px">${escapeHtml(restore.relative)}</div>`}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums">${Number(acc.success || 0)}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums">${Number(acc.fail || 0)}</td>
+                <td><div class="row-actions">
+                  <button class="icon-btn" data-action="edit" type="button" title="编辑">编辑</button>
+                  <button class="icon-btn" data-action="refresh" type="button" title="刷新此账号">刷新</button>
+                  <button class="icon-btn danger" data-action="delete" type="button" title="删除">删除</button>
+                </div></td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="account-pagination">
+      <div class="muted" style="font-size:12px">显示第 ${start + 1}–${Math.min(start + rows.length, total)} 条，共 ${total} 条</div>
+      <div class="pager">
+        <button class="secondary" type="button" id="acctPagePrev" ${view.page <= 1 ? "disabled" : ""}>‹</button>
+        <span class="muted">${view.page} / ${pageCount} 页</span>
+        <button class="secondary" type="button" id="acctPageNext" ${view.page >= pageCount ? "disabled" : ""}>›</button>
+        <select id="acctPageSize">${PAGE_SIZE_OPTIONS.map((n) => `<option value="${n}" ${pageSize === n ? "selected" : ""}>${n}/页</option>`).join("")}</select>
+      </div>
+    </div>
+  `;
+
+  $("#acctSelectAll", host)?.addEventListener("change", (event) => {
+    if (event.target.checked) for (const r of rows) view.selected.add(r.access_token);
+    else for (const r of rows) view.selected.delete(r.access_token);
+    patchAccountsView();
+  });
+  $$(".acct-row-check", host).forEach((cb) => {
+    cb.addEventListener("change", (event) => {
+      const tok = event.target.dataset.token;
+      if (event.target.checked) view.selected.add(tok); else view.selected.delete(tok);
+      patchAccountsView();
+    });
+  });
+  $$("tr[data-token]", host).forEach((row) => {
     const token = row.dataset.token;
     $("[data-action='refresh']", row)?.addEventListener("click", () => refreshAccounts([token]));
     $("[data-action='edit']", row)?.addEventListener("click", () => openEditAccountDialog(token));
     $("[data-action='delete']", row)?.addEventListener("click", () => deleteAccounts([token]));
   });
+  $("#acctPagePrev", host)?.addEventListener("click", () => { view.page = Math.max(1, view.page - 1); renderAccountsTable(); });
+  $("#acctPageNext", host)?.addEventListener("click", () => { view.page = Math.min(pageCount, view.page + 1); renderAccountsTable(); });
+  $("#acctPageSize", host)?.addEventListener("change", (event) => {
+    view.pageSize = Number(event.target.value) || 10;
+    view.page = 1;
+    renderAccountsTable();
+  });
+}
+
+function patchAccountsView() {
+  reconcileAccountsSelection();
+  renderAccountsStats();
+  renderAccountsBulkbar();
+  renderAccountsTable();
+}
+
+function renderAccounts() {
+  const view = accountsViewState();
+  reconcileAccountsSelection();
+  const target = UPSTREAM_VIEWS.includes(state.view) ? ($("#upstreamPanel") || $("#panel")) : $("#panel");
+  const types = availableAccountTypes(state.accounts || []);
+  target.innerHTML = `
+    <div class="card account-card">
+      <div class="upstream-header">
+        <div>
+          <h2>号池</h2>
+          <p class="muted">管理 chatgpt2api 的 ChatGPT 账号池，支持筛选、批量刷新、导出 Token、移除异常账号。</p>
+        </div>
+        <div class="upstream-header-actions">
+          <button class="secondary" type="button" id="acctRefreshAllBtn">一键刷新所有</button>
+          <button class="secondary" type="button" id="acctExportBtn">导出全部 Token</button>
+          <button class="primary" type="button" id="acctAddBtn">新增账号</button>
+        </div>
+      </div>
+
+      <div id="acctStats" class="account-stats"></div>
+
+      <div class="account-filters">
+        <label class="account-search">
+          <span class="muted" style="font-size:12px">搜索邮箱</span>
+          <input id="acctSearch" type="search" placeholder="按邮箱过滤" value="${escapeHtml(view.search)}">
+        </label>
+        <label>
+          <span class="muted" style="font-size:12px">类型</span>
+          <select id="acctTypeFilter">
+            <option value="all" ${view.typeFilter === "all" ? "selected" : ""}>全部类型</option>
+            ${types.map((t) => `<option value="${escapeHtml(t)}" ${view.typeFilter === t ? "selected" : ""}>${escapeHtml(ACCOUNT_TYPE_LABELS[t] || t)}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          <span class="muted" style="font-size:12px">状态</span>
+          <select id="acctStatusFilter">
+            <option value="all" ${view.statusFilter === "all" ? "selected" : ""}>全部状态</option>
+            ${ACCOUNT_STATUSES.map((s) => `<option value="${s}" ${view.statusFilter === s ? "selected" : ""}>${s}</option>`).join("")}
+          </select>
+        </label>
+        <div class="account-filter-spacer"></div>
+        <button class="secondary" type="button" id="acctRefreshBtn">刷新列表</button>
+      </div>
+
+      <div id="acctBulkbar"></div>
+      <div id="acctTableHost"></div>
+    </div>
+  `;
+
+  $("#acctAddBtn").addEventListener("click", () => openAddAccountDialog());
+  $("#acctRefreshAllBtn").addEventListener("click", () => refreshAccounts([]));
+  $("#acctExportBtn").addEventListener("click", () => downloadAccountTokens(state.accounts || []));
+  $("#acctRefreshBtn").addEventListener("click", async () => {
+    try { const data = await api("/api/admin/upstream/accounts"); state.accounts = data.items || []; patchAccountsView(); toast("已刷新列表"); }
+    catch (error) { toast(error.message); }
+  });
+  const search = $("#acctSearch");
+  if (search) {
+    search.addEventListener("input", (event) => {
+      view.search = String(event.target.value || "");
+      view.page = 1;
+      renderAccountsTable();
+    });
+  }
+  $("#acctTypeFilter")?.addEventListener("change", (event) => {
+    view.typeFilter = String(event.target.value || "all");
+    view.page = 1;
+    patchAccountsView();
+  });
+  $("#acctStatusFilter")?.addEventListener("change", (event) => {
+    view.statusFilter = String(event.target.value || "all");
+    view.page = 1;
+    patchAccountsView();
+  });
+
+  patchAccountsView();
 }
 
 async function refreshAccounts(accessTokens = []) {
+  const list = Array.isArray(accessTokens) ? accessTokens.filter(Boolean) : [];
   try {
-    const data = await api("/api/admin/upstream/accounts/refresh", { method: "POST", body: JSON.stringify({ access_tokens: accessTokens }) });
-    if (Array.isArray(data.items)) { state.accounts = data.items; renderAccounts(); }
-    else { await loadPanel(); renderAccounts(); }
-    toast(accessTokens.length ? "已刷新" : "已刷新全部");
+    const data = await api("/api/admin/upstream/accounts/refresh", { method: "POST", body: JSON.stringify({ access_tokens: list }) });
+    if (Array.isArray(data.items)) { state.accounts = data.items; patchAccountsView(); }
+    else { await loadPanel(); patchAccountsView(); }
+    toast(list.length ? `已刷新 ${list.length} 个` : "已刷新全部");
   } catch (error) { toast(error.message); }
 }
 
 async function deleteAccounts(tokens) {
-  if (!Array.isArray(tokens) || tokens.length === 0) return;
-  if (!window.confirm(`确认删除 ${tokens.length} 个账号？`)) return;
+  const list = Array.isArray(tokens) ? tokens.filter(Boolean) : [];
+  if (!list.length) return;
+  if (!window.confirm(`确认删除 ${list.length} 个账号？此操作不可撤销。`)) return;
   try {
-    await api("/api/admin/upstream/accounts", { method: "DELETE", body: JSON.stringify({ tokens }) });
-    toast("已删除");
-    await loadPanel(); renderAccounts();
+    await api("/api/admin/upstream/accounts", { method: "DELETE", body: JSON.stringify({ tokens: list }) });
+    toast(`已删除 ${list.length} 个`);
+    accountsViewState().selected.clear();
+    await loadPanel(); patchAccountsView();
   } catch (error) { toast(error.message); }
+}
+
+async function removeAbnormalSelected() {
+  const view = accountsViewState();
+  const items = state.accounts || [];
+  const abnormal = items
+    .filter((a) => view.selected.has(a.access_token) && a.status === "异常")
+    .map((a) => a.access_token);
+  if (!abnormal.length) { toast("选中范围内没有异常账号"); return; }
+  deleteAccounts(abnormal);
 }
 
 function openAddAccountDialog() {
@@ -491,7 +819,7 @@ function openAddAccountDialog() {
     try {
       const result = await api("/api/admin/upstream/accounts", { method: "POST", body: JSON.stringify({ tokens, entries }) });
       toast(`导入 ${result.added ?? (tokens.length + entries.length)} 条`);
-      wrap.remove(); await loadPanel(); renderAccounts();
+      wrap.remove(); await loadPanel(); patchAccountsView();
     } catch (error) { toast(error.message); }
   });
 }
@@ -499,11 +827,14 @@ function openAddAccountDialog() {
 function openEditAccountDialog(token) {
   const account = (state.accounts || []).find((a) => a.access_token === token);
   if (!account) return;
+  const currentType = accountTypeKey(account);
   const wrap = document.createElement("div");
   wrap.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,0.42);display:grid;place-items:center;z-index:60";
   wrap.innerHTML = `
     <div class="card" style="max-width:520px;width:90%">
       <h2 style="margin-top:0">编辑账号</h2>
+      <p class="muted" style="font-size:12px;margin-top:-6px">${escapeHtml(account.email || "未关联邮箱")} · <code style="font-family:ui-monospace,monospace">${escapeHtml(tokenPreview(token))}</code></p>
+      <label>类型<select id="editAccountType">${ACCOUNT_TYPE_OPTIONS.map((v) => `<option value="${v}" ${currentType === v ? "selected" : ""}>${ACCOUNT_TYPE_LABELS[v] || v}</option>`).join("")}</select></label>
       <label>状态<select id="editAccountStatus">${ACCOUNT_STATUSES.map((v) => `<option value="${v}" ${account.status === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
       <label>配额 <input id="editAccountQuota" type="number" min="0" value="${Number(account.quota || 0)}"></label>
       <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
@@ -515,10 +846,15 @@ function openEditAccountDialog(token) {
   document.body.appendChild(wrap);
   $("#editAccountCancel", wrap).addEventListener("click", () => wrap.remove());
   $("#editAccountSubmit", wrap).addEventListener("click", async () => {
-    const payload = { access_token: token, status: $("#editAccountStatus", wrap).value, quota: Number($("#editAccountQuota", wrap).value || 0) };
+    const payload = {
+      access_token: token,
+      type: $("#editAccountType", wrap).value,
+      status: $("#editAccountStatus", wrap).value,
+      quota: Number($("#editAccountQuota", wrap).value || 0)
+    };
     try {
       await api("/api/admin/upstream/accounts/update", { method: "POST", body: JSON.stringify(payload) });
-      toast("已更新"); wrap.remove(); await loadPanel(); renderAccounts();
+      toast("已更新"); wrap.remove(); await loadPanel(); patchAccountsView();
     } catch (error) { toast(error.message); }
   });
 }
