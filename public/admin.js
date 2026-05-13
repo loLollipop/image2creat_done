@@ -4,7 +4,7 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = {
   user: null,
   firstRun: false,
-  view: "users",
+  view: "dashboard",
   settings: null,
   users: [],
   records: [],
@@ -86,83 +86,262 @@ function toast(message) {
   setTimeout(() => node.remove(), 2600);
 }
 
+function hideSidebar() {
+  const sidebar = $("#adminSidebar");
+  const overlay = $("#sidebarOverlay");
+  const topbar = $(".admin-topbar");
+  if (sidebar) sidebar.classList.add("hidden");
+  if (topbar) topbar.classList.add("hidden");
+  if (overlay) overlay.classList.remove("open");
+}
+
+function showSidebar() {
+  const sidebar = $("#adminSidebar");
+  const overlay = $("#sidebarOverlay");
+  const topbar = $(".admin-topbar");
+  if (sidebar) sidebar.classList.remove("hidden");
+  if (topbar) topbar.classList.remove("hidden");
+  if (overlay) overlay.classList.remove("open");
+}
+
 function renderLogin() {
-  $("#logoutBtn").classList.add("hidden");
+  hideSidebar();
   $("#adminApp").innerHTML = `
-    <section class="hero">
-      <h1>后台管理</h1>
-      <p>请使用管理员账号登录。</p>
-    </section>
-    <section class="card" style="max-width:460px">
-      <h2>管理员登录</h2>
-      <form id="loginForm" class="form">
-        <label>邮箱<input id="emailInput" type="email" autocomplete="email" required></label>
-        <label>密码<input id="passwordInput" type="password" autocomplete="current-password" required></label>
-        <button class="primary" type="submit">登录后台</button>
-        <a class="secondary" href="/" style="display:grid;place-items:center">回到前台</a>
-      </form>
-    </section>
+    <div style="max-width:420px;margin:80px auto;padding:0 16px">
+      <div class="page-header" style="text-align:center">
+        <div style="width:56px;height:56px;margin:0 auto 16px;border-radius:16px;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:grid;place-items:center;color:#fff;font-size:24px"><i class="ri-sparkling-2-fill"></i></div>
+        <h1>后台管理</h1>
+        <p class="desc">请使用管理员账号登录。</p>
+      </div>
+      <section class="card">
+        <form id="loginForm" class="form">
+          <label>邮箱<input id="emailInput" type="email" autocomplete="email" required></label>
+          <label>密码<input id="passwordInput" type="password" autocomplete="current-password" required></label>
+          <button class="primary" type="submit" style="width:100%;justify-content:center">登录后台</button>
+          <a class="secondary" href="/" style="display:grid;place-items:center">回到前台</a>
+        </form>
+      </section>
+    </div>
   `;
   $("#loginForm").addEventListener("submit", login);
 }
 
 function renderDenied() {
+  hideSidebar();
   $("#logoutBtn").classList.remove("hidden");
   $("#adminApp").innerHTML = `
-    <section class="hero">
-      <h1>没有后台权限</h1>
-      <p>当前账号 ${escapeHtml(state.user?.email || "")} 不是管理员。</p>
-    </section>
-    <section class="card" style="max-width:520px">
-      <button class="secondary" type="button" id="backHome">返回前台</button>
-    </section>
+    <div style="max-width:420px;margin:80px auto;padding:0 16px;text-align:center">
+      <div class="page-header">
+        <h1>没有后台权限</h1>
+        <p class="desc">当前账号 ${escapeHtml(state.user?.email || "")} 不是管理员。</p>
+      </div>
+      <section class="card">
+        <button class="secondary" type="button" id="backHome" style="width:100%;justify-content:center">返回前台</button>
+      </section>
+    </div>
   `;
   $("#backHome").addEventListener("click", () => { window.location.href = "/"; });
 }
 
 // ===================== Main Admin Layout =====================
 
-const UPSTREAM_VIEWS = ["accounts", "register", "upstream_settings", "logs", "backups", "settings"];
+const NAV_ITEMS = [
+  { section: "概览" },
+  { view: "dashboard", label: "仪表盘", icon: "ri-dashboard-line" },
+  { section: "业务管理" },
+  { view: "generations", label: "生图记录", icon: "ri-image-line" },
+  { view: "users", label: "用户管理", icon: "ri-user-line" },
+  { view: "redeem", label: "卡密管理", icon: "ri-coupon-line" },
+  { view: "transactions", label: "积分流水", icon: "ri-exchange-line" },
+  { view: "payments", label: "支付订单", icon: "ri-bank-card-line" },
+  { section: "上游管理" },
+  { view: "accounts", label: "号池", icon: "ri-database-2-line" },
+  { view: "logs", label: "调用日志", icon: "ri-file-list-line" },
+  { view: "register", label: "注册机", icon: "ri-robot-line" },
+  { view: "upstream_settings", label: "上游设置", icon: "ri-settings-4-line" },
+  { view: "backups", label: "备份", icon: "ri-hard-drive-2-line" },
+  { section: "系统" },
+  { view: "settings", label: "接口设置", icon: "ri-tools-line" }
+];
 
-function renderAdmin() {
-  $("#logoutBtn").classList.remove("hidden");
-  const isUpstreamView = UPSTREAM_VIEWS.includes(state.view);
-  $("#adminApp").innerHTML = `
-    <section class="hero">
-      <h1>后台管理</h1>
-      <p>管理用户、积分、接口，查看生图日志。</p>
-    </section>
-    <div class="tabs">
-      <button class="secondary ${state.view === "generations" ? "active" : ""}" data-view="generations">生图记录</button>
-      <button class="secondary ${state.view === "users" ? "active" : ""}" data-view="users">用户管理</button>
-      <button class="secondary ${state.view === "redeem" ? "active" : ""}" data-view="redeem">卡密管理</button>
-      <button class="secondary ${state.view === "transactions" ? "active" : ""}" data-view="transactions">积分流水</button>
-      <button class="secondary ${state.view === "payments" ? "active" : ""}" data-view="payments">支付订单</button>
-      <button class="secondary ${isUpstreamView ? "active" : ""}" data-view="upstream">上游管理</button>
-    </div>
-    ${isUpstreamView ? `
-      <div class="sub-tabs">
-        <button class="secondary ${state.view === "accounts" ? "active" : ""}" data-view="accounts">号池</button>
-        <button class="secondary ${state.view === "logs" ? "active" : ""}" data-view="logs">调用日志</button>
-        <button class="secondary ${state.view === "register" ? "active" : ""}" data-view="register">注册机</button>
-        <button class="secondary ${state.view === "upstream_settings" ? "active" : ""}" data-view="upstream_settings">上游设置</button>
-        <button class="secondary ${state.view === "backups" ? "active" : ""}" data-view="backups">备份</button>
-        <button class="secondary ${state.view === "settings" ? "active" : ""}" data-view="settings">接口设置</button>
-      </div>
-    ` : ""}
-    <section id="panel"></section>
-  `;
-  $$("[data-view]").forEach((button) => {
-    button.addEventListener("click", async () => {
+const VIEW_TITLES = {
+  dashboard: "仪表盘",
+  generations: "生图记录",
+  users: "用户管理",
+  redeem: "卡密管理",
+  transactions: "积分流水",
+  payments: "支付订单",
+  accounts: "号池管理",
+  logs: "调用日志",
+  register: "注册机",
+  upstream_settings: "上游设置",
+  backups: "备份管理",
+  settings: "接口设置"
+};
+
+function renderSidebar() {
+  const nav = $("#sidebarNav");
+  if (!nav) return;
+  nav.innerHTML = NAV_ITEMS.map((item) => {
+    if (item.section) return `<div class="sidebar-section">${item.section}</div>`;
+    if (item.divider) return `<div class="sidebar-divider"></div>`;
+    return `<button class="sidebar-item ${state.view === item.view ? "active" : ""}" data-view="${item.view}"><i class="${item.icon}"></i> ${item.label}</button>`;
+  }).join("");
+
+  nav.querySelectorAll("[data-view]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
       stopRegisterPolling();
-      const target = button.dataset.view;
-      // Clicking the "上游管理" main tab defaults to the first sub-tab (号池)
-      state.view = target === "upstream" ? "accounts" : target;
+      state.view = btn.dataset.view;
+      // close mobile sidebar
+      const sidebar = $("#adminSidebar");
+      const overlay = $("#sidebarOverlay");
+      if (sidebar) sidebar.classList.remove("open");
+      if (overlay) overlay.classList.remove("open");
       await loadPanel();
       renderAdmin();
     });
   });
-  renderPanel();
+}
+
+function setupMobileMenu() {
+  const menuBtn = $("#mobileMenuBtn");
+  const sidebar = $("#adminSidebar");
+  const overlay = $("#sidebarOverlay");
+  if (menuBtn) {
+    menuBtn.addEventListener("click", () => {
+      sidebar?.classList.toggle("open");
+      overlay?.classList.toggle("open");
+    });
+  }
+  if (overlay) {
+    overlay.addEventListener("click", () => {
+      sidebar?.classList.remove("open");
+      overlay.classList.remove("open");
+    });
+  }
+}
+
+function renderAdmin() {
+  showSidebar();
+  $("#logoutBtn").classList.remove("hidden");
+  const title = VIEW_TITLES[state.view] || "后台管理";
+  const topbarTitle = $("#topbarTitle");
+  if (topbarTitle) topbarTitle.textContent = title;
+
+  renderSidebar();
+  setupMobileMenu();
+
+  if (state.view === "dashboard") {
+    renderDashboard();
+  } else {
+    $("#adminApp").innerHTML = `<section id="panel"></section>`;
+    renderPanel();
+  }
+}
+
+function renderDashboard() {
+  const users = state.users || [];
+  const gens = state.generations || [];
+  const accounts = state.accounts || [];
+  const txs = state.transactions || [];
+
+  const totalUsers = users.length;
+  const activeUsers = users.filter((u) => u.status === "active").length;
+  const totalGens = gens.length;
+  const completedGens = gens.filter((g) => g.status === "completed").length;
+  const totalAccounts = accounts.length;
+  const healthyAccounts = accounts.filter((a) => !a.status || a.status === "active" || a.status === "ok").length;
+  const totalCreditsUsed = txs.filter((t) => t.delta < 0).reduce((s, t) => s + Math.abs(t.delta), 0);
+
+  $("#adminApp").innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Dashboard</span>
+      <h1>仪表盘</h1>
+      <p class="desc">GPT Image Studio 运行概览。</p>
+    </div>
+    <div class="dash-stats">
+      <div class="dash-stat">
+        <div class="dash-stat-icon blue"><i class="ri-image-line"></i></div>
+        <div class="dash-stat-body">
+          <div class="dash-stat-label">生图总数</div>
+          <div class="dash-stat-value">${totalGens.toLocaleString()}</div>
+        </div>
+      </div>
+      <div class="dash-stat">
+        <div class="dash-stat-icon green"><i class="ri-user-line"></i></div>
+        <div class="dash-stat-body">
+          <div class="dash-stat-label">活跃用户</div>
+          <div class="dash-stat-value">${activeUsers} <span style="font-size:13px;color:var(--muted);font-weight:400">/ ${totalUsers}</span></div>
+        </div>
+      </div>
+      <div class="dash-stat">
+        <div class="dash-stat-icon purple"><i class="ri-database-2-line"></i></div>
+        <div class="dash-stat-body">
+          <div class="dash-stat-label">号池账号</div>
+          <div class="dash-stat-value">${healthyAccounts} <span style="font-size:13px;color:var(--muted);font-weight:400">/ ${totalAccounts}</span></div>
+        </div>
+      </div>
+      <div class="dash-stat">
+        <div class="dash-stat-icon warn"><i class="ri-coin-line"></i></div>
+        <div class="dash-stat-body">
+          <div class="dash-stat-label">积分消耗</div>
+          <div class="dash-stat-value">${totalCreditsUsed.toLocaleString()}</div>
+        </div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:16px">
+      <div class="card">
+        <h3 style="display:flex;align-items:center;gap:8px;margin-bottom:16px"><i class="ri-image-line" style="color:var(--accent)"></i> 最近生图</h3>
+        ${gens.length ? `
+          <div class="table-wrap">
+            <table style="min-width:auto">
+              <thead><tr><th>时间</th><th>用户</th><th>提示词</th><th>状态</th></tr></thead>
+              <tbody>
+                ${gens.slice(0, 5).map((r) => `
+                  <tr>
+                    <td class="muted" style="white-space:nowrap">${fmt(r.createdAt)}</td>
+                    <td>${escapeHtml(r.userName || r.userEmail || "")}</td>
+                    <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(r.prompt || "")}">${escapeHtml((r.prompt || "").slice(0, 50))}</td>
+                    <td><span class="status ${r.status === "completed" ? "ok" : r.status === "failed" ? "failed" : ""}">${escapeHtml(r.status || "")}</span></td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+          <div style="margin-top:12px;text-align:right"><button class="tiny" data-view="generations">查看全部 →</button></div>
+        ` : `<div class="empty" style="padding:24px">暂无生图记录</div>`}
+      </div>
+      <div class="card">
+        <h3 style="display:flex;align-items:center;gap:8px;margin-bottom:16px"><i class="ri-user-line" style="color:var(--green)"></i> 最新用户</h3>
+        ${users.length ? `
+          <div class="table-wrap">
+            <table style="min-width:auto">
+              <thead><tr><th>用户</th><th>状态</th><th>积分</th><th>注册时间</th></tr></thead>
+              <tbody>
+                ${users.slice(0, 5).map((u) => `
+                  <tr>
+                    <td><strong>${escapeHtml(u.name || u.email)}</strong></td>
+                    <td><span class="status ${u.status === "active" ? "ok" : "failed"}">${u.status === "active" ? "启用" : "停用"}</span></td>
+                    <td>${Number(u.credits || 0)}</td>
+                    <td class="muted">${fmt(u.createdAt)}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+          <div style="margin-top:12px;text-align:right"><button class="tiny" data-view="users">查看全部 →</button></div>
+        ` : `<div class="empty" style="padding:24px">暂无用户</div>`}
+      </div>
+    </div>
+  `;
+
+  $$("#adminApp [data-view]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      state.view = btn.dataset.view;
+      await loadPanel();
+      renderAdmin();
+    });
+  });
 }
 
 function stopRegisterPolling() {
@@ -289,24 +468,22 @@ function renderPanel() {
 function renderUnifiedLogs() {
   const upstreamLogs = state.logs || [];
   const filter = state.logsFilter || { type: "", start_date: "", end_date: "" };
-  const panel = $("#panel") || $("#upstreamPanel");
+  const panel = $("#panel");
   if (!panel) return;
 
   const selectedCount = state.logsSelected ? state.logsSelected.size : 0;
 
   panel.innerHTML = `
-    <div class="card">
-      <div class="upstream-header">
-        <div>
-          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Logs</div>
-          <h2>日志管理</h2>
-          <p class="muted">查看上游 chatgpt2api 的调用与账号管理日志。可按类型、日期筛选，支持批量删除。</p>
-        </div>
-        <div class="upstream-header-actions">
-          <button class="secondary" type="button" id="logsRefreshBtn">刷新</button>
-          <button class="secondary" type="button" id="logsDeleteBtn" ${selectedCount ? "" : "disabled"}>删除所选${selectedCount ? ` (${selectedCount})` : ""}</button>
-        </div>
+    <div class="page-header">
+      <span class="kicker">Logs</span>
+      <h1>调用日志</h1>
+      <p class="desc">查看上游 chatgpt2api 的调用与账号管理日志。</p>
+      <div class="page-header-actions">
+        <button class="secondary" type="button" id="logsRefreshBtn">刷新</button>
+        <button class="secondary" type="button" id="logsDeleteBtn" ${selectedCount ? "" : "disabled"}>删除所选${selectedCount ? ` (${selectedCount})` : ""}</button>
       </div>
+    </div>
+    <div class="card">
       <form id="logsFilterForm" class="form" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px">
         <label style="flex:0 0 150px">日志类型
           <select id="logsTypeInput">
@@ -703,22 +880,20 @@ function patchAccountsView() {
 function renderAccounts() {
   const view = accountsViewState();
   reconcileAccountsSelection();
-  const target = UPSTREAM_VIEWS.includes(state.view) ? ($("#upstreamPanel") || $("#panel")) : $("#panel");
+  const target = $("#panel");
   const types = availableAccountTypes(state.accounts || []);
   target.innerHTML = `
-    <div class="card account-card">
-      <div class="upstream-header">
-        <div>
-          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Account Pool</div>
-          <h2>号池管理</h2>
-          <p class="muted">管理 ChatGPT 账号池，支持筛选、批量刷新、导出 Token、移除异常账号。</p>
-        </div>
-        <div class="upstream-header-actions">
-          <button class="secondary" type="button" id="acctRefreshAllBtn">一键刷新所有</button>
-          <button class="secondary" type="button" id="acctExportBtn">导出全部 Token</button>
-          <button class="primary" type="button" id="acctAddBtn">新增账号</button>
-        </div>
+    <div class="page-header">
+      <span class="kicker">Account Pool</span>
+      <h1>号池管理</h1>
+      <p class="desc">管理 ChatGPT 账号池，支持筛选、批量刷新、导出 Token、移除异常账号。</p>
+      <div class="page-header-actions">
+        <button class="secondary" type="button" id="acctRefreshAllBtn">一键刷新所有</button>
+        <button class="secondary" type="button" id="acctExportBtn">导出全部 Token</button>
+        <button class="primary" type="button" id="acctAddBtn">新增账号</button>
       </div>
+    </div>
+    <div class="card account-card">
 
       <div id="acctStats" class="account-stats"></div>
 
@@ -971,18 +1146,15 @@ function renderRegister() {
   const dis = enabled ? "disabled" : "";
   const dAttr = (field) => registerFieldDisabled(field, mode, enabled) ? "disabled" : "";
 
-  const target = $("#upstreamPanel") || $("#panel");
+  const target = $("#panel");
   target.innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Register</span>
+      <h1>注册机</h1>
+      <p class="desc">自动注册流程。可配置多个邮箱提供商，按启用顺序轮换。</p>
+      <div class="page-header-actions"><span id="regStatusBadge" class="status ${enabled ? "warn" : ""}">${enabled ? "运行中" : "已停止"}</span></div>
+    </div>
     <div class="card">
-      <div class="upstream-header">
-        <div>
-          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Register</div>
-          <h2>ChatGPT 注册机</h2>
-          <p class="muted">自动注册流程。可配置多个邮箱提供商，按启用顺序轮换。</p>
-        </div>
-        <div class="upstream-header-actions"><span id="regStatusBadge" class="status ${enabled ? "warn" : ""}">${enabled ? "运行中" : "已停止"}</span></div>
-      </div>
-
       <form id="regForm" class="form">
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:flex-end">
           <label>模式<select id="regMode" ${dis}>${Object.entries(REGISTER_MODE_LABELS).map(([v, l]) => `<option value="${v}" ${mode === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
@@ -1184,8 +1356,12 @@ async function registerLifecycle(action) {
 
 function renderUsers() {
   $("#panel").innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Users</span>
+      <h1>用户管理</h1>
+      <p class="desc">管理注册用户，调整角色、状态和积分。</p>
+    </div>
     <div class="card">
-      <h2>用户管理</h2>
       <div class="table-wrap">
         <table>
           <thead><tr><th>用户</th><th>角色</th><th>状态</th><th>积分</th><th>增减</th><th>注册时间</th><th></th></tr></thead>
@@ -1215,7 +1391,33 @@ function renderRedeem() {
   const codes = state.redeemCodes || [];
   const filter = state.redeemFilter || "";
   const lastBatch = state.lastBatch;
+  const unusedCount = codes.filter((c) => c.status === "unused").length;
+  const usedCount = codes.filter((c) => c.status === "used").length;
+  const disabledCount = codes.filter((c) => c.status === "disabled").length;
   $("#panel").innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Redeem Codes</span>
+      <h1>卡密管理</h1>
+      <p class="desc">创建和管理兑换卡密。</p>
+    </div>
+    <div class="dash-stats" style="margin-bottom:20px">
+      <div class="dash-stat">
+        <div class="dash-stat-icon blue"><i class="ri-coupon-line"></i></div>
+        <div class="dash-stat-body"><div class="dash-stat-label">总数</div><div class="dash-stat-value" style="font-size:22px">${codes.length}</div></div>
+      </div>
+      <div class="dash-stat">
+        <div class="dash-stat-icon green"><i class="ri-checkbox-circle-line"></i></div>
+        <div class="dash-stat-body"><div class="dash-stat-label">未使用</div><div class="dash-stat-value" style="font-size:22px">${unusedCount}</div></div>
+      </div>
+      <div class="dash-stat">
+        <div class="dash-stat-icon warn"><i class="ri-check-double-line"></i></div>
+        <div class="dash-stat-body"><div class="dash-stat-label">已使用</div><div class="dash-stat-value" style="font-size:22px">${usedCount}</div></div>
+      </div>
+      <div class="dash-stat">
+        <div class="dash-stat-icon red"><i class="ri-close-circle-line"></i></div>
+        <div class="dash-stat-body"><div class="dash-stat-label">已禁用</div><div class="dash-stat-value" style="font-size:22px">${disabledCount}</div></div>
+      </div>
+    </div>
     <div class="grid">
       <section class="card">
         <h2>批量生成卡密</h2>
@@ -1312,8 +1514,12 @@ function txLabel(type) { return TX_TYPE_LABELS[type] || type; }
 function renderTransactions() {
   const txs = state.transactions || [];
   $("#panel").innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Transactions</span>
+      <h1>积分流水</h1>
+      <p class="desc">查看所有用户的积分变动记录。</p>
+    </div>
     <div class="card">
-      <h2>积分流水</h2>
       <div class="table-wrap">
         <table>
           <thead><tr><th>用户</th><th>类型</th><th>变动</th><th>余额</th><th>备注</th><th>时间</th></tr></thead>
@@ -1340,8 +1546,12 @@ function renderTransactions() {
 function renderPayments() {
   const payments = state.payments || [];
   $("#panel").innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Payments</span>
+      <h1>支付订单</h1>
+      <p class="desc">查看所有支付记录和订单状态。</p>
+    </div>
     <div class="card">
-      <h2>支付订单</h2>
       <div class="table-wrap">
         <table>
           <thead><tr><th>订单号</th><th>用户</th><th>金额</th><th>积分</th><th>状态</th><th>时间</th></tr></thead>
@@ -1370,9 +1580,12 @@ function renderGenerations() {
   const panel = $("#panel");
   if (!panel) return;
   panel.innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Generations</span>
+      <h1>生图记录</h1>
+      <p class="desc">查看所有用户的生成记录，包括提示词、用户、IP 和状态信息。</p>
+    </div>
     <div class="card">
-      <h2>生图记录</h2>
-      <p class="muted">管理员可查看所有用户的生成记录，包括提示词、用户、IP、浏览器信息和错误信息。</p>
       <div class="table-wrap">
         <table>
           <thead><tr>
@@ -1404,13 +1617,13 @@ function renderGenerations() {
 const LOG_LEVEL_OPTIONS = ["debug", "info", "warning", "error"];
 
 function renderUpstreamSettings() {
-  const target = $("#upstreamPanel") || $("#panel");
+  const target = $("#panel");
   if (!target) return;
   const cfg = state.upstreamConfig?.config || state.upstreamConfig || {};
   const storage = state.upstreamStorage;
 
   if (state.upstreamConfigError) {
-    target.innerHTML = `<div class="card"><div class="upstream-header"><div><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Settings</div><h2>上游设置</h2><p class="muted">管理 chatgpt2api 运行参数。</p></div></div><div class="empty" style="color:#e11d48">${escapeHtml(state.upstreamConfigError)}</div></div>`;
+    target.innerHTML = `<div class="page-header"><span class="kicker">Upstream Settings</span><h1>上游设置</h1><p class="desc">管理 chatgpt2api 运行参数。</p></div><div class="card"><div class="empty" style="color:#e11d48">${escapeHtml(state.upstreamConfigError)}</div></div>`;
     return;
   }
 
@@ -1419,16 +1632,13 @@ function renderUpstreamSettings() {
   const aiReview = cfg.ai_review || {};
 
   target.innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Upstream Settings</span>
+      <h1>上游设置</h1>
+      <p class="desc">管理 chatgpt2api 运行参数、代理、日志级别、敏感词和 AI 审核。</p>
+      <div class="page-header-actions"><button class="primary" type="button" id="upstreamSaveBtn">保存配置</button></div>
+    </div>
     <div class="card">
-      <div class="upstream-header">
-        <div>
-          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Settings</div>
-          <h2>上游设置</h2>
-          <p class="muted">管理 chatgpt2api 运行参数、代理、日志级别、敏感词和 AI 审核。</p>
-        </div>
-        <div class="upstream-header-actions"><button class="primary" type="button" id="upstreamSaveBtn">保存配置</button></div>
-      </div>
-
       <form id="upstreamConfigForm" class="form">
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
           <label>账号刷新间隔（分钟）
@@ -1602,7 +1812,7 @@ function formatBytes(value) {
 }
 
 function renderBackups() {
-  const target = $("#upstreamPanel") || $("#panel");
+  const target = $("#panel");
   if (!target) return;
   const backups = state.backups || [];
   const bs = state.backupState || {};
@@ -1612,17 +1822,13 @@ function renderBackups() {
   const statusClass = bs.running ? "warn" : bs.last_status === "success" ? "ok" : bs.last_status === "error" ? "failed" : "";
 
   target.innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Backup</span>
+      <h1>备份管理</h1>
+      <p class="desc">将关键数据定时备份到 Cloudflare R2，支持可选加密、轮替、手动执行与历史清理。</p>
+      <div class="page-header-actions"><span class="status ${statusClass}">${statusLabel}</span></div>
+    </div>
     <div class="card">
-      <div class="upstream-header">
-        <div>
-          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Backup</div>
-          <h2>R2 备份管理</h2>
-          <p class="muted">将关键数据定时备份到 Cloudflare R2，支持可选加密、轮替、手动执行与历史清理。</p>
-        </div>
-        <div class="upstream-header-actions">
-          <span class="status ${statusClass}">${statusLabel}</span>
-        </div>
-      </div>
       ${state.backupsError ? `<div class="empty" style="color:#e11d48">${escapeHtml(state.backupsError)}</div>` : ""}
 
       <div style="background:var(--surface,#f8fafc);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:12px;margin-bottom:16px;font-size:13px;color:#57534e">
@@ -1802,9 +2008,13 @@ function renderSettings() {
   const upstreams = settings.upstreams || { chatgpt2api: {}, cpa: {} };
   const active = settings.activeUpstream || "chatgpt2api";
   $("#panel").innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Settings</span>
+      <h1>接口设置</h1>
+      <p class="desc">配置上游 API 接口、注册选项和积分策略。</p>
+    </div>
     <div class="grid">
       <section class="card">
-        <h2>接口设置</h2>
         <form id="settingsForm" class="form">
           <fieldset class="upstream-group">
             <legend>当前启用上游</legend>
@@ -1878,7 +2088,20 @@ function renderSettings() {
 // ===================== Data loading =====================
 
 async function loadPanel() {
-  if (state.view === "generations") {
+  if (state.view === "dashboard") {
+    try {
+      const [usersData, gensData, accData, txData] = await Promise.all([
+        api("/api/admin/users").catch(() => ({ users: [] })),
+        api("/api/admin/generations").catch(() => ({ records: [] })),
+        api("/api/admin/upstream/accounts").catch(() => ({ items: [] })),
+        api("/api/admin/credit-transactions").catch(() => ({ transactions: [] }))
+      ]);
+      state.users = usersData.users || [];
+      state.generations = gensData.records || [];
+      state.accounts = accData.items || [];
+      state.transactions = txData.transactions || [];
+    } catch (error) { console.warn("dashboard load error:", error); }
+  } else if (state.view === "generations") {
     try {
       const data = await api("/api/admin/generations");
       state.generations = data.records || [];

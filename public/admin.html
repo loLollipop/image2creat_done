@@ -6,23 +6,32 @@
     <title>后台管理 - GPT Image Studio</title>
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/remixicon@4.6.0/fonts/remixicon.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="./admin.css?v=20260512-cachefix1">
+    <link rel="stylesheet" href="./admin.css?v=20260513b">
   </head>
   <body>
     <div class="admin-shell">
-      <header class="admin-topbar">
-        <a class="brand" href="/">
+      <aside id="adminSidebar" class="admin-sidebar">
+        <a class="sidebar-brand" href="/">
           <span><i class="ri-sparkling-2-fill"></i></span>
-          GPT Image Studio
+          Image Studio
         </a>
-        <nav>
-          <a href="/">前台</a>
-          <button id="logoutBtn" class="hidden" type="button">退出</button>
-        </nav>
+        <nav class="sidebar-nav" id="sidebarNav"></nav>
+        <div class="sidebar-footer">
+          <a href="/"><i class="ri-arrow-left-line"></i> 返回前台</a>
+          <button id="logoutBtn" class="hidden" type="button"><i class="ri-logout-circle-r-line"></i> 退出登录</button>
+        </div>
+      </aside>
+      <div id="sidebarOverlay" class="sidebar-overlay"></div>
+      <header class="admin-topbar">
+        <div style="display:flex;align-items:center;gap:12px">
+          <button id="mobileMenuBtn" class="mobile-menu-btn" type="button"><i class="ri-menu-line"></i></button>
+          <span id="topbarTitle" class="topbar-title"></span>
+        </div>
+        <div class="topbar-actions" id="topbarActions"></div>
       </header>
       <main id="adminApp"></main>
       <div id="toastLayer" class="toast-layer"></div>
     </div>
-    <script src="./admin.js?v=20260512-cachefix1" defer></script>
+    <script src="./admin.js?v=20260513b" defer></script>
   </body>
 </html>
