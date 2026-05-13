@@ -82,6 +82,11 @@ a { color: inherit; text-decoration: none; }
   text-decoration: none;
   border-bottom: 1px solid rgba(255,255,255,0.06);
   flex-shrink: 0;
+  transition: opacity var(--transition);
+}
+
+.sidebar-brand:hover {
+  opacity: 0.85;
 }
 
 .sidebar-brand span {
@@ -143,9 +148,11 @@ a { color: inherit; text-decoration: none; }
 }
 
 .sidebar-item.active {
-  background: rgba(99,102,241,0.15);
-  color: #a5b4fc;
+  background: linear-gradient(135deg, rgba(99,102,241,0.2), rgba(139,92,246,0.15));
+  color: #c4b5fd;
   font-weight: 600;
+  border-left: 3px solid #818cf8;
+  padding-left: 9px;
 }
 
 .sidebar-divider {
@@ -247,6 +254,14 @@ a { color: inherit; text-decoration: none; }
   line-height: 1.5;
 }
 
+.page-header-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 12px;
+}
+
 /* ===== Dashboard Stats ===== */
 .dash-stats {
   display: grid;
@@ -263,11 +278,12 @@ a { color: inherit; text-decoration: none; }
   display: flex;
   align-items: flex-start;
   gap: 14px;
-  transition: box-shadow var(--transition);
+  transition: box-shadow var(--transition), transform var(--transition);
 }
 
 .dash-stat:hover {
   box-shadow: var(--shadow);
+  transform: translateY(-2px);
 }
 
 .dash-stat-icon {
@@ -311,6 +327,11 @@ a { color: inherit; text-decoration: none; }
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
   padding: 24px;
+  transition: box-shadow var(--transition);
+}
+
+.card:hover {
+  box-shadow: var(--shadow);
 }
 
 .card h2, .card h3 { margin: 0 0 14px; }
@@ -339,12 +360,15 @@ a { color: inherit; text-decoration: none; }
 
 .primary {
   border: 0;
-  background: var(--dark);
+  background: linear-gradient(135deg, #6366f1, #7c3aed);
   color: #fff;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+  box-shadow: 0 1px 3px rgba(99,102,241,0.25);
 }
 
-.primary:hover { background: #1e293b; }
+.primary:hover {
+  background: linear-gradient(135deg, #4f46e5, #6d28d9);
+  box-shadow: 0 4px 12px rgba(99,102,241,0.3);
+}
 
 .secondary {
   background: var(--paper);
@@ -450,40 +474,7 @@ input[type="checkbox"] {
   background: var(--soft);
 }
 
-/* ===== Sub-tabs (upstream management) ===== */
-.sub-tabs {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  margin-bottom: 20px;
-  padding: 6px;
-  background: var(--paper);
-  border-radius: var(--radius);
-  border: 1px solid var(--line);
-}
 
-.sub-tabs button {
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text);
-  padding: 0 14px;
-  min-height: 34px;
-  font-size: 13px;
-  font-weight: 500;
-  transition: all var(--transition);
-}
-
-.sub-tabs button.active {
-  background: var(--dark);
-  color: #fff;
-  border-color: var(--dark);
-  font-weight: 600;
-}
-
-.sub-tabs button:not(.active):hover {
-  background: var(--soft);
-}
 
 /* ===== Tables ===== */
 .table-wrap {

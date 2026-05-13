@@ -145,8 +145,6 @@ function renderDenied() {
 
 // ===================== Main Admin Layout =====================
 
-const UPSTREAM_VIEWS = ["accounts", "register", "upstream_settings", "logs", "backups", "settings"];
-
 const NAV_ITEMS = [
   { section: "概览" },
   { view: "dashboard", label: "仪表盘", icon: "ri-dashboard-line" },
@@ -162,7 +160,7 @@ const NAV_ITEMS = [
   { view: "register", label: "注册机", icon: "ri-robot-line" },
   { view: "upstream_settings", label: "上游设置", icon: "ri-settings-4-line" },
   { view: "backups", label: "备份", icon: "ri-hard-drive-2-line" },
-  { divider: true },
+  { section: "系统" },
   { view: "settings", label: "接口设置", icon: "ri-tools-line" }
 ];
 
@@ -233,30 +231,8 @@ function renderAdmin() {
   renderSidebar();
   setupMobileMenu();
 
-  const isUpstreamView = UPSTREAM_VIEWS.includes(state.view);
   if (state.view === "dashboard") {
     renderDashboard();
-  } else if (isUpstreamView) {
-    $("#adminApp").innerHTML = `
-      <div class="sub-tabs">
-        <button class="secondary ${state.view === "accounts" ? "active" : ""}" data-view="accounts">号池</button>
-        <button class="secondary ${state.view === "logs" ? "active" : ""}" data-view="logs">调用日志</button>
-        <button class="secondary ${state.view === "register" ? "active" : ""}" data-view="register">注册机</button>
-        <button class="secondary ${state.view === "upstream_settings" ? "active" : ""}" data-view="upstream_settings">上游设置</button>
-        <button class="secondary ${state.view === "backups" ? "active" : ""}" data-view="backups">备份</button>
-        <button class="secondary ${state.view === "settings" ? "active" : ""}" data-view="settings">接口设置</button>
-      </div>
-      <section id="panel"></section>
-    `;
-    $$("#adminApp [data-view]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        stopRegisterPolling();
-        state.view = btn.dataset.view;
-        await loadPanel();
-        renderAdmin();
-      });
-    });
-    renderPanel();
   } else {
     $("#adminApp").innerHTML = `<section id="panel"></section>`;
     renderPanel();
@@ -492,24 +468,22 @@ function renderPanel() {
 function renderUnifiedLogs() {
   const upstreamLogs = state.logs || [];
   const filter = state.logsFilter || { type: "", start_date: "", end_date: "" };
-  const panel = $("#panel") || $("#upstreamPanel");
+  const panel = $("#panel");
   if (!panel) return;
 
   const selectedCount = state.logsSelected ? state.logsSelected.size : 0;
 
   panel.innerHTML = `
-    <div class="card">
-      <div class="upstream-header">
-        <div>
-          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Logs</div>
-          <h2>日志管理</h2>
-          <p class="muted">查看上游 chatgpt2api 的调用与账号管理日志。可按类型、日期筛选，支持批量删除。</p>
-        </div>
-        <div class="upstream-header-actions">
-          <button class="secondary" type="button" id="logsRefreshBtn">刷新</button>
-          <button class="secondary" type="button" id="logsDeleteBtn" ${selectedCount ? "" : "disabled"}>删除所选${selectedCount ? ` (${selectedCount})` : ""}</button>
-        </div>
+    <div class="page-header">
+      <span class="kicker">Logs</span>
+      <h1>调用日志</h1>
+      <p class="desc">查看上游 chatgpt2api 的调用与账号管理日志。</p>
+      <div class="page-header-actions">
+        <button class="secondary" type="button" id="logsRefreshBtn">刷新</button>
+        <button class="secondary" type="button" id="logsDeleteBtn" ${selectedCount ? "" : "disabled"}>删除所选${selectedCount ? ` (${selectedCount})` : ""}</button>
       </div>
+    </div>
+    <div class="card">
       <form id="logsFilterForm" class="form" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px">
         <label style="flex:0 0 150px">日志类型
           <select id="logsTypeInput">
@@ -906,22 +880,20 @@ function patchAccountsView() {
 function renderAccounts() {
   const view = accountsViewState();
   reconcileAccountsSelection();
-  const target = UPSTREAM_VIEWS.includes(state.view) ? ($("#upstreamPanel") || $("#panel")) : $("#panel");
+  const target = $("#panel");
   const types = availableAccountTypes(state.accounts || []);
   target.innerHTML = `
-    <div class="card account-card">
-      <div class="upstream-header">
-        <div>
-          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Account Pool</div>
-          <h2>号池管理</h2>
-          <p class="muted">管理 ChatGPT 账号池，支持筛选、批量刷新、导出 Token、移除异常账号。</p>
-        </div>
-        <div class="upstream-header-actions">
-          <button class="secondary" type="button" id="acctRefreshAllBtn">一键刷新所有</button>
-          <button class="secondary" type="button" id="acctExportBtn">导出全部 Token</button>
-          <button class="primary" type="button" id="acctAddBtn">新增账号</button>
-        </div>
+    <div class="page-header">
+      <span class="kicker">Account Pool</span>
+      <h1>号池管理</h1>
+      <p class="desc">管理 ChatGPT 账号池，支持筛选、批量刷新、导出 Token、移除异常账号。</p>
+      <div class="page-header-actions">
+        <button class="secondary" type="button" id="acctRefreshAllBtn">一键刷新所有</button>
+        <button class="secondary" type="button" id="acctExportBtn">导出全部 Token</button>
+        <button class="primary" type="button" id="acctAddBtn">新增账号</button>
       </div>
+    </div>
+    <div class="card account-card">
 
       <div id="acctStats" class="account-stats"></div>
 
@@ -1174,18 +1146,15 @@ function renderRegister() {
   const dis = enabled ? "disabled" : "";
   const dAttr = (field) => registerFieldDisabled(field, mode, enabled) ? "disabled" : "";
 
-  const target = $("#upstreamPanel") || $("#panel");
+  const target = $("#panel");
   target.innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Register</span>
+      <h1>注册机</h1>
+      <p class="desc">自动注册流程。可配置多个邮箱提供商，按启用顺序轮换。</p>
+      <div class="page-header-actions"><span id="regStatusBadge" class="status ${enabled ? "warn" : ""}">${enabled ? "运行中" : "已停止"}</span></div>
+    </div>
     <div class="card">
-      <div class="upstream-header">
-        <div>
-          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Register</div>
-          <h2>ChatGPT 注册机</h2>
-          <p class="muted">自动注册流程。可配置多个邮箱提供商，按启用顺序轮换。</p>
-        </div>
-        <div class="upstream-header-actions"><span id="regStatusBadge" class="status ${enabled ? "warn" : ""}">${enabled ? "运行中" : "已停止"}</span></div>
-      </div>
-
       <form id="regForm" class="form">
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:flex-end">
           <label>模式<select id="regMode" ${dis}>${Object.entries(REGISTER_MODE_LABELS).map(([v, l]) => `<option value="${v}" ${mode === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
@@ -1648,13 +1617,13 @@ function renderGenerations() {
 const LOG_LEVEL_OPTIONS = ["debug", "info", "warning", "error"];
 
 function renderUpstreamSettings() {
-  const target = $("#upstreamPanel") || $("#panel");
+  const target = $("#panel");
   if (!target) return;
   const cfg = state.upstreamConfig?.config || state.upstreamConfig || {};
   const storage = state.upstreamStorage;
 
   if (state.upstreamConfigError) {
-    target.innerHTML = `<div class="card"><div class="upstream-header"><div><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Settings</div><h2>上游设置</h2><p class="muted">管理 chatgpt2api 运行参数。</p></div></div><div class="empty" style="color:#e11d48">${escapeHtml(state.upstreamConfigError)}</div></div>`;
+    target.innerHTML = `<div class="page-header"><span class="kicker">Upstream Settings</span><h1>上游设置</h1><p class="desc">管理 chatgpt2api 运行参数。</p></div><div class="card"><div class="empty" style="color:#e11d48">${escapeHtml(state.upstreamConfigError)}</div></div>`;
     return;
   }
 
@@ -1663,16 +1632,13 @@ function renderUpstreamSettings() {
   const aiReview = cfg.ai_review || {};
 
   target.innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Upstream Settings</span>
+      <h1>上游设置</h1>
+      <p class="desc">管理 chatgpt2api 运行参数、代理、日志级别、敏感词和 AI 审核。</p>
+      <div class="page-header-actions"><button class="primary" type="button" id="upstreamSaveBtn">保存配置</button></div>
+    </div>
     <div class="card">
-      <div class="upstream-header">
-        <div>
-          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Settings</div>
-          <h2>上游设置</h2>
-          <p class="muted">管理 chatgpt2api 运行参数、代理、日志级别、敏感词和 AI 审核。</p>
-        </div>
-        <div class="upstream-header-actions"><button class="primary" type="button" id="upstreamSaveBtn">保存配置</button></div>
-      </div>
-
       <form id="upstreamConfigForm" class="form">
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
           <label>账号刷新间隔（分钟）
@@ -1846,7 +1812,7 @@ function formatBytes(value) {
 }
 
 function renderBackups() {
-  const target = $("#upstreamPanel") || $("#panel");
+  const target = $("#panel");
   if (!target) return;
   const backups = state.backups || [];
   const bs = state.backupState || {};
@@ -1856,17 +1822,13 @@ function renderBackups() {
   const statusClass = bs.running ? "warn" : bs.last_status === "success" ? "ok" : bs.last_status === "error" ? "failed" : "";
 
   target.innerHTML = `
+    <div class="page-header">
+      <span class="kicker">Backup</span>
+      <h1>备份管理</h1>
+      <p class="desc">将关键数据定时备份到 Cloudflare R2，支持可选加密、轮替、手动执行与历史清理。</p>
+      <div class="page-header-actions"><span class="status ${statusClass}">${statusLabel}</span></div>
+    </div>
     <div class="card">
-      <div class="upstream-header">
-        <div>
-          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.18em;font-weight:600;margin-bottom:2px">Backup</div>
-          <h2>R2 备份管理</h2>
-          <p class="muted">将关键数据定时备份到 Cloudflare R2，支持可选加密、轮替、手动执行与历史清理。</p>
-        </div>
-        <div class="upstream-header-actions">
-          <span class="status ${statusClass}">${statusLabel}</span>
-        </div>
-      </div>
       ${state.backupsError ? `<div class="empty" style="color:#e11d48">${escapeHtml(state.backupsError)}</div>` : ""}
 
       <div style="background:var(--surface,#f8fafc);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:12px;margin-bottom:16px;font-size:13px;color:#57534e">
