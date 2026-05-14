@@ -39,6 +39,7 @@ const PORT = Number(process.env.PORT || 3000);
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MODEL = "gpt-image-2";
+const DEFAULT_CHATGPT2API_BASE_URL = "http://chatgpt2api:80";
 const CHECKIN_CREDIT = Number.parseInt(process.env.CHECKIN_CREDIT || "1", 10) || 1;
 
 const generationWindows = new Map();
@@ -175,8 +176,8 @@ function getUpstreamConfig(settings = {}, upstreamId = getActiveUpstreamId(setti
   }
   return {
     id: "chatgpt2api",
-    apiKey: settings.openaiApiKey || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "",
-    baseUrl: String(settings.apiBaseUrl || process.env.AI_API_BASE_URL || process.env.OPENAI_BASE_URL || "").trim().replace(/\/+$/, ""),
+    apiKey: settings.openaiApiKey || process.env.CHATGPT2API_AUTH_KEY || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "",
+    baseUrl: String(settings.apiBaseUrl || process.env.CHATGPT2API_IMAGE_BASE_URL || process.env.UPSTREAM_PROXY_BASE_URL || process.env.AI_API_BASE_URL || process.env.OPENAI_BASE_URL || "").trim().replace(/\/+$/, ""),
     model: (settings.model || "").trim()
   };
 }
@@ -204,6 +205,18 @@ function getOpenAIImageEndpoint(settings = {}) {
   return joinUpstreamPath(getOpenAIBaseUrl(settings), "images/generations");
 }
 
+function getNativeChatgpt2apiConfig(settings = {}) {
+  const cfg = getUpstreamConfig(settings, "chatgpt2api");
+  const baseUrl = String(cfg.baseUrl || DEFAULT_CHATGPT2API_BASE_URL).trim().replace(/\/+$/, "");
+  const apiKey = String(cfg.apiKey || "").trim();
+  return { baseUrl, apiKey };
+}
+
+function getNativeChatgpt2apiImageEndpoint(settings = {}) {
+  const { baseUrl } = getNativeChatgpt2apiConfig(settings);
+  return joinUpstreamPath(baseUrl, "images/generations");
+}
+
 function getOpenAIResponsesEndpoint(settings = {}) {
   return joinUpstreamPath(getOpenAIBaseUrl(settings), "responses");
 }
@@ -220,9 +233,10 @@ function maskApiKey(key) {
 
 function publicSettings(settings) {
   const active = getUpstreamConfig(settings);
+  const imageGeneration = getNativeChatgpt2apiConfig(settings);
   return {
-    hasApiKey: Boolean(active.apiKey && active.baseUrl),
-    model: active.model || settings.model || DEFAULT_MODEL,
+    hasApiKey: Boolean(imageGeneration.apiKey && imageGeneration.baseUrl),
+    model: getUpstreamConfig(settings, "chatgpt2api").model || settings.model || DEFAULT_MODEL,
     activeUpstream: active.id,
     allowRegistration: Boolean(settings.allowRegistration),
     requireApproval: Boolean(settings.requireApproval),
@@ -442,6 +456,43 @@ async function callOpenAIImages(settings, payload) {
   if (!response.ok) {
     const message = data?.error?.message || "OpenAI image request failed";
     throw httpError(message, response.status, data);
+  }
+
+  return data;
+}
+
+async function callNativeChatgpt2apiImages(settings, payload) {
+  const { apiKey } = getNativeChatgpt2apiConfig(settings);
+  if (!apiKey) {
+    throw httpError("chatgpt2api auth key is not configured", 400);
+  }
+
+  const response = await fetch(getNativeChatgpt2apiImageEndpoint(settings), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: payload.model,
+      prompt: payload.prompt,
+      n: payload.n,
+      size: payload.size,
+      response_format: "b64_json"
+    })
+  });
+
+  const text = await response.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!response.ok) {
+    const message = data?.error?.message || data?.detail?.error || data?.detail || "chatgpt2api image request failed";
+    throw httpError(String(message), response.status, data);
   }
 
   return data;
@@ -1425,8 +1476,9 @@ async function routeApi(req, res, url) {
     const body = await readJsonBody(req);
     const prompt = cleanPrompt(body.prompt);
     const settings = await store.getSettings();
-    if (!getOpenAIApiKey(settings) || !getOpenAIBaseUrl(settings)) {
-      throw httpError("AI API is not configured", 400);
+    const nativeChatgpt2api = getNativeChatgpt2apiConfig(settings);
+    if (!nativeChatgpt2api.baseUrl || !nativeChatgpt2api.apiKey) {
+      throw httpError("chatgpt2api image API is not configured", 400);
     }
 
     const user = await store.getUserById(current.user.id);
@@ -1443,8 +1495,7 @@ async function routeApi(req, res, url) {
     const n = sanitizePositiveInt(body.n, 1, maxImages);
     const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
     const totalCost = costPerImage * n;
-    const activeUpstream = getActiveUpstreamId(settings);
-    const activeModel = getUpstreamConfig(settings, activeUpstream).model;
+    const activeModel = getUpstreamConfig(settings, "chatgpt2api").model;
     const request = {
       model: String(activeModel || settings.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
       prompt,
@@ -1496,14 +1547,14 @@ async function routeApi(req, res, url) {
     }
 
     try {
-      const openaiResult = await callOpenAIImages(settings, openaiRequest);
+      const openaiResult = await callNativeChatgpt2apiImages(settings, openaiRequest);
       if (!conversationId) {
         const conversation = await store.createConversation(user.id, prompt.slice(0, 60));
         conversationId = conversation.id;
         autoCreatedConversationId = conversation.id;
         request.conversationId = conversation.id;
       }
-      const saved = await saveGeneratedImages(user, request, openaiResult, activeUpstream);
+      const saved = await saveGeneratedImages(user, request, openaiResult, "chatgpt2api");
       if (!saved.length) {
         throw httpError("OpenAI did not return a savable image", 502);
       }
