@@ -43,6 +43,7 @@ const state = {
 };
 
 let registerPollTimer = null;
+let registerFormDirty = false;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -358,7 +359,7 @@ function startRegisterPolling() {
     if (state.view !== "register") { stopRegisterPolling(); return; }
     try {
       const data = await api("/api/admin/upstream/register");
-      state.register = data.register || null;
+      if (!registerFormDirty) state.register = data.register || null;
       const reg = state.register || {};
       patchRegisterLiveSections(reg);
       // If the register loop finished on its own (enabled flipped to false),
@@ -369,6 +370,10 @@ function startRegisterPolling() {
       }
     } catch (error) { console.warn("register poll failed:", error.message); }
   }, 2000);
+}
+
+function markRegisterFormDirty() {
+  registerFormDirty = true;
 }
 
 // Update only the stats grid + log stream in-place. The <form> and its inputs
@@ -1215,7 +1220,10 @@ function renderRegister() {
   `;
 
   // Event bindings
+  registerFormDirty = false;
   $("#regForm").addEventListener("submit", saveRegisterConfig);
+  $("#regForm").addEventListener("input", markRegisterFormDirty);
+  $("#regForm").addEventListener("change", markRegisterFormDirty);
   $("#regStart").addEventListener("click", () => registerLifecycle("start"));
   $("#regStop").addEventListener("click", () => registerLifecycle("stop"));
   $("#regReset").addEventListener("click", () => registerLifecycle("reset"));
@@ -1335,6 +1343,7 @@ async function saveRegisterConfig(event) {
   try {
     const data = await api("/api/admin/upstream/register", { method: "POST", body: JSON.stringify(payload) });
     state.register = data.register || null;
+    registerFormDirty = false;
     toast("配置已保存"); renderRegister();
   } catch (error) { toast(error.message); }
 }
@@ -1344,6 +1353,7 @@ async function registerLifecycle(action) {
   try {
     const data = await api(`/api/admin/upstream/register/${action}`, { method: "POST" });
     state.register = data.register || null;
+    registerFormDirty = false;
     toast({ start: "已启动", stop: "已停止", reset: "已重置" }[action] || "OK");
     if (action === "start") startRegisterPolling();
     if (action === "stop") stopRegisterPolling();

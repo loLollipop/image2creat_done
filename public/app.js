@@ -815,16 +815,22 @@ async function submitGeneration(form) {
             n: 1
           })
         });
-    const generation = historyItemFromGeneration(data.generations[0]);
+    const newGenerations = (data.generations || []).map(historyItemFromGeneration);
+    if (!newGenerations.length) throw new Error("No image was returned");
+    const generation = newGenerations[0];
     state.activeConversationId = data.conversationId || state.activeConversationId;
-    state.history = state.history.map((entry) =>
-      entry.id === tempId ? generation : entry
+    state.history = dedupeHistoryById(
+      state.history.flatMap((entry) => entry.id === tempId ? newGenerations : [entry])
     );
-    state.allGenerations = [generation, ...state.allGenerations.filter((entry) => entry.id !== generation.id)];
+    state.allGenerations = dedupeHistoryById([
+      ...newGenerations,
+      ...state.allGenerations
+    ]).sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
     state.user.credits = data.credits;
-    state.stats.todayGenerated += data.generations.length;
+    state.stats.todayGenerated += newGenerations.length;
     updateDailyMetric();
     await loadConversations();
+    if (state.activeConversationId) await switchToConversation(state.activeConversationId);
     if (item.isPublic) await loadPublicGallery();
     if (isImageEdit) {
       setComposerReference({
@@ -902,6 +908,15 @@ function historyItemFromGeneration(generation) {
   };
 }
 
+function dedupeHistoryById(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    if (!item?.id || seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+}
+
 async function loadHistory() {
   if (!state.user) {
     state.history = [];
@@ -912,8 +927,10 @@ async function loadHistory() {
     const data = await api("/api/images/history");
     const items = (data.generations || []).map(historyItemFromGeneration);
     state.allGenerations = [...items].sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
-    if (!state.activeConversationId) {
-      state.history = [];
+    if (state.activeConversationId) {
+      state.history = items
+        .filter((item) => item.conversationId === state.activeConversationId)
+        .sort((a, b) => new Date(a.time || 0) - new Date(b.time || 0));
     }
   } catch (error) {
     showToast(error.message, "ri-error-warning-line");
