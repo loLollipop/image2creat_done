@@ -1,18 +1,23 @@
 # Local stack: MySQL + chatgpt2api (free upstream, built from vendored source)
-# + GPT Image Studio.
+# + the legacy Node.js backend (`app`) + the new Next.js frontend (`web`).
 #
 # Usage:
 #   1. cp .env.example .env  (and edit secrets)
 #   2. docker compose up -d --build
-#   3. open http://localhost:3000
+#   3. open http://localhost:3001        <-- new Next.js frontend (preferred)
+#      open http://localhost:3000        <-- legacy vanilla-JS frontend (being phased out)
 #
-# Single external port: only `:3000` (the gpt-image-studio web app) is
-# exposed. chatgpt2api is now fully native-integrated into image2creat_done's
-# admin UI (号池 / 调用日志 / 注册机 / 系统设置 / 备份 tabs) and the iframe is
-# gone. image2creat_done still calls chatgpt2api admin APIs over the docker
-# network via UPSTREAM_PROXY_BASE_URL. The chatgpt2api container is bound to
-# 127.0.0.1:8080 only for direct local debugging and is NOT reachable from
-# the public internet.
+# Ports:
+#   - 3000  legacy Node.js backend + legacy `public/*.html` frontend.
+#           Still the canonical owner of `/api/*`, `/data/*`, `/output/*`.
+#   - 3001  new Next.js frontend.  Proxies `/api/*` back to :3000 via
+#           next.config.ts rewrites (dev) or the `API_PROXY_TARGET` env
+#           (prod / docker).
+#   - 8080  chatgpt2api upstream, bound to 127.0.0.1 only — debug-only.
+#
+# In production we recommend an nginx in front of these two services that
+# routes `/api/*`, `/data/*`, `/output/*`, `/legacy/*` to :3000 and
+# everything else to :3001.  See README.md for a sample config.
 #
 # In the gpt-image-studio admin (login as ADMIN_EMAIL), open the
 # 「号池」/「调用日志」/「注册机」/「系统设置」/「备份」 tabs to manage
@@ -77,7 +82,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: gpt-image-studio:local
-    container_name: gpt-image-app
+    container_name: gpt-image-app-backend
     restart: unless-stopped
     depends_on:
       mysql:
@@ -123,6 +128,31 @@ services:
       - "3000:3000"
     volumes:
       - app-generated:/app/data/generated
+
+  # Next.js frontend introduced in P0 (PR "Foundation").  Lives in web/.
+  # Talks to the legacy backend over the docker network via the
+  # `API_PROXY_TARGET` env which next.config.ts reads at build time and the
+  # standalone server reads at runtime.  Subsequent PRs (P1..P6) replace the
+  # legacy `public/*.html` UI with real pages here.
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    image: gpt-image-studio-web:local
+    container_name: gpt-image-app-web
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      HOSTNAME: 0.0.0.0
+      # Used by next.config.ts rewrites to forward /api/*, /data/* and
+      # /output/* to the legacy backend over the docker network.
+      API_PROXY_TARGET: http://app:3000
+    ports:
+      - "3001:3001"
 
 volumes:
   mysql-data:

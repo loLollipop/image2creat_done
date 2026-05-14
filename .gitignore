@@ -2,6 +2,12 @@
 node_modules/
 npm-debug.log*
 
+# Next.js frontend (web/) build output
+web/.next/
+web/out/
+web/.turbo/
+web/next-env.d.ts.bak
+
 # Env
 .env
 .env.local

@@ -28,10 +28,19 @@
 ![GitHub图像](output/screencapture-38-22-89-219-3456-2026-04-30-14_33_11.png)
 ## Tech Stack
 
+**后端（`server.js` + `src/`）**
 - Node.js 22+
 - MySQL 8+
-- Vanilla HTML/CSS/JavaScript
-- 原生 `fetch` 调用兼容 OpenAI Images API 风格的服务
+- 原生 `http` 模块 + `mysql2` 连接池
+- 兼容 OpenAI Images API 风格的上游代理（chatgpt2api / CPA）
+
+**新前端（`web/`，逐步迁移中）**
+- Next.js 16 + React 19 + TypeScript
+- Tailwind CSS 4 + Radix UI + lucide-react + sonner
+- Zustand 状态管理 + react-hook-form
+
+**老前端（`public/*.html`）**
+- Vanilla HTML/CSS/JavaScript。仍可用，但会在后续 PR（P1~P6）里逐页被 `web/` 替换。
 
 ## Quick Start
 
@@ -42,11 +51,12 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-**单端口部署**：对外仅暴露 `:3000`。chatgpt2api 的管理功能已经原生集成到生图站后台（号池 / 调用日志 / 注册机 / 上游设置 / 备份），不再有 iframe / 反向代理。chatgpt2api 容器端口 `127.0.0.1:8080` 仅绑定到本机，留作直连调试用。
+**双服务部署**（从 P0 起生效）：`app`（老后端 + 老前端）运行在 `:3000`，`web`（新 Next.js 前端）运行在 `:3001`。生产环境推荐用 nginx 把 `/api/*`/`/data/*`/`/output/*`/`/legacy/*` 路由到 `:3000`，其余路由到 `:3001`（示例见下方）。chatgpt2api 依然仅绑定 `127.0.0.1:8080`，留作直连调试。
 
 | 服务 | 暴露端口 | 说明 |
 | --- | --- | --- |
-| `app`（生图站） | http://localhost:3000 | **唯一对外端口**；admin 后台原生承载所有 chatgpt2api 管理界面 |
+| `web`（新 Next.js 前端） | http://localhost:3001 | **首选公开端口**；本身不含 API，通过 `next.config.ts` 里的 rewrites 把 `/api/*` 代理到 `:3000` |
+| `app`（老 Node.js 后端 + 老前端） | http://localhost:3000 | 后端 API（`/api/*`、`/data/*`、`/output/*`）与老版 `public/*.html` 前端仍在这里；走 P1~P6 逐步下架老前端 |
 | `chatgpt2api`（上游） | http://127.0.0.1:8080 | 仅本机可达，用作排障；admin 不再访问 |
 | `mysql` | 3306 | 默认密码取自 `.env` 的 `MYSQL_PASSWORD` |
 
@@ -54,15 +64,20 @@ docker compose up -d --build
 
 首次启动后：
 
-1. 打开 http://localhost:3000，使用 `.env` 里的管理员邮箱密码登录。
-2. 进入「后台管理 → 号池」，添加至少一个 ChatGPT 账号 `access_token`（详见 [chatgpt2api 项目说明](https://github.com/basketikun/chatgpt2api)）。也可以走「注册机」tab 让 chatgpt2api 自动注册新号。
-3. 「调用日志」「上游设置」「备份」三个 tab 提供原本 chatgpt2api admin 面板的全部能力，无需再访问 iframe。
-4. 回到「后台管理 → 接口设置」确认 `API 地址 = http://chatgpt2api:80/v1`、`API Key = CHATGPT2API_AUTH_KEY` 已被 docker-compose 预填，无需手工修改。
+1. 打开 http://localhost:3001（新 Next.js 前端）或 http://localhost:3000（老前端），使用 `.env` 里的管理员邮箱密码登录。两者后面是同一个 Node.js 后端 + MySQL，账号 / 积分 / 会话互通。
+2. 进入后台 → 「号池与注册机」，添加至少一个 ChatGPT 账号 `access_token`（详见 [chatgpt2api 项目说明](https://github.com/basketikun/chatgpt2api)）；也可以走同页的「注册机」区域让 chatgpt2api 自动注册新号。
+3. 后台 → 「上游与备份」提供原本 chatgpt2api admin 面板的调用日志 / 上游设置 / 备份能力。
+4. 后台 → 「接口设置」确认 `API 地址 = http://chatgpt2api:80/v1`、`API Key = CHATGPT2API_AUTH_KEY` 已被 docker-compose 预填，无需手工修改。
 5. 注册一个普通账号，注册即送 10 积分，可以直接生图。
 
-#### nginx / Cloudflare 反向代理（线上部署示例）
+> P0（本 PR）只交付了 `web/` 的骨架：登录 / 注册页完整可用，其他页面为「等待迁移」占位。P1～P6 会逐页填充。在那之前，生图主流程请仍走老前端 http://localhost:3000。
+
+#### nginx / Cloudflare 反向代理（线上双服务部署示例）
 
 ```nginx
+upstream image_studio_backend { server 127.0.0.1:3000; }
+upstream image_studio_web     { server 127.0.0.1:3001; }
+
 server {
   listen 443 ssl;
   server_name your-domain.com;
@@ -71,17 +86,20 @@ server {
 
   client_max_body_size 32M;
 
-  location / {
-    proxy_pass http://127.0.0.1:3000;
-    proxy_set_header Host              $host;
-    proxy_set_header X-Real-IP         $remote_addr;
-    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_http_version 1.1;
-    proxy_read_timeout 600s;   # 给生图请求留足时间
-  }
+  # 后端 API 与静态资源走老 Node.js 服务。
+  location /api/    { proxy_pass http://image_studio_backend; include /etc/nginx/proxy_params; proxy_read_timeout 600s; }
+  location /data/   { proxy_pass http://image_studio_backend; include /etc/nginx/proxy_params; }
+  location /output/ { proxy_pass http://image_studio_backend; include /etc/nginx/proxy_params; }
+
+  # 测试期保留老前端访问入口。P6 后可以删除。
+  location /legacy/ { proxy_pass http://image_studio_backend/; include /etc/nginx/proxy_params; }
+
+  # 其余路径走新 Next.js 前端。
+  location / { proxy_pass http://image_studio_web; include /etc/nginx/proxy_params; }
 }
 ```
+
+> 如果还没准备好 nginx，也可以临时只暴露 `:3001`，让 Next.js 自己 rewrites 代理 `/api/*` 到同主机的 `:3000`（但 `:3000` 不能公开出去，或者被防火墙拦住）。
 
 > 不要再在 nginx 里单独转发 `:8080` —— `:8080` 已经被绑定到 docker 主机的 `127.0.0.1`，公网无法访问；上游管理已经原生在 `/admin` 后台里，不需要单独路由。
 
@@ -89,22 +107,36 @@ server {
 
 ### 方式 B：仅本地 Node.js（你已经有 MySQL 和 AI API）
 
+**后端 + 老前端**
+
 ```bash
 npm install
 cp .env.example .env   # Windows: copy .env.example .env
 node server.js
 ```
 
-默认启动地址：
+默认老前端启动地址：
 
 ```text
-http://localhost:3000
+http://localhost:3000          # 老前端 + API
+http://localhost:3000/admin    # 老后台
 ```
 
-管理员后台：
+**新 Next.js 前端（另起一个进程）**
+
+```bash
+cd web
+npm install
+npm run dev          # 启动 :3001，并在 next.config.ts 里 rewrite /api/* 到 :3000
+# 或生产构建：
+npm run build && npm run start
+```
+
+新前端默认地址：
 
 ```text
-http://localhost:3000/admin
+http://localhost:3001          # 新 Next.js 前端
+http://localhost:3001/admin/dashboard   # 新后台（P0 为骨架，P4～P6 逐步填充）
 ```
 
 ## Environment Variables
@@ -242,6 +274,8 @@ POST {AI_API_BASE_URL}/v1/images/edits
 
 ## Development
 
+**老后端 + 老前端**
+
 运行基础语法检查：
 
 ```bash
@@ -257,6 +291,20 @@ set RUN_MYSQL_SMOKE=1
 set MYSQL_DATABASE=gpt_image_studio_test
 node scripts/smoke-test.js
 ```
+
+**新 Next.js 前端（`web/`）**
+
+```bash
+cd web
+npm install
+npm run dev        # 启动开发服务器（:3001，热重载），并 rewrite /api/* 到 :3000
+npm run typecheck  # tsc --noEmit
+npm run lint       # next lint / eslint flat config
+npm run build      # 生产构建（输出 .next/standalone）
+npm run start      # 生产模式启动
+```
+
+`web/` 通过 `next.config.ts` 的 rewrites 在开发态把 `/api/*`、`/data/*`、`/output/*` 反向代理到 `http://localhost:3000`（老后端）。如果老后端不在本机，把环境变量 `API_PROXY_TARGET` 设到对应主机即可。
 
 ## Native admin & 上游 admin API 通道
 
@@ -288,14 +336,23 @@ node scripts/smoke-test.js
 ```text
 .
 ├── database/           # MySQL schema
-├── public/             # Frontend assets
+├── public/             # Legacy frontend (vanilla HTML/CSS/JS) — being phased out
 ├── scripts/            # Local helper scripts and smoke tests
 ├── src/                # MySQL store and shared server helpers
 ├── server.js           # HTTP server and API routes
-├── Dockerfile          # Production-friendly Node.js image
-├── docker-compose.yml  # MySQL + chatgpt2api + app one-shot stack
+├── Dockerfile          # Backend Node.js image
+├── docker-compose.yml  # MySQL + chatgpt2api + app(:3000) + web(:3001)
 ├── vendor/
 │   └── chatgpt2api/    # Vendored upstream (MIT) via git subtree
+├── web/                # NEW Next.js frontend (Next.js 16 + Tailwind 4 + Radix)
+│   ├── src/
+│   │   ├── app/        # App router pages: /, /login, /register, /create, ...
+│   │   ├── components/ # Shared UI: top-nav, auth-provider, ui/*
+│   │   ├── lib/        # api / auth client helpers
+│   │   └── store/      # Zustand stores
+│   ├── next.config.ts  # Rewrites /api/*, /data/*, /output/* -> :3000
+│   ├── Dockerfile      # Next.js standalone build (port 3001)
+│   └── package.json
 ├── .env.example        # Safe environment template
 └── README.md
 ```
