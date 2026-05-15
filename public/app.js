@@ -603,29 +603,7 @@ function setComposerReference({ url = "", imageData = "", name = "", sourceGener
 }
 
 function openWorkspace(options = {}) {
-  const {
-    prompt = "",
-    imageUrl = "",
-    imageData = "",
-    sourceGenerationId = "",
-    conversationId = null,
-    preserveReference = false
-  } = options;
-  if (typeof prompt === "string") state.draftPrompt = prompt;
-  if (imageUrl || imageData) {
-    setComposerReference({
-      url: imageUrl || imageData,
-      imageData: imageData || "",
-      sourceGenerationId: sourceGenerationId || null,
-      conversationId: conversationId || state.activeConversationId || null
-    });
-  } else if (!preserveReference) {
-    clearComposerReferences();
-  }
-  setView("workspace");
-  syncComposers();
-  syncReferences();
-  setTimeout(() => $(".prompt-box", elements.stickyComposerMount)?.focus(), 80);
+  window.location.href = "/playground/";
 }
 
 function renderAll() {
