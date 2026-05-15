@@ -144,6 +144,24 @@
             <button class="model-chip options-toggle" type="button">
               <span class="model-label">gpt-image-2</span>
             </button>
+            <span class="composer-mode-badge" data-mode="generate">
+              <i class="ri-sparkling-2-line"></i>
+              <span class="composer-mode-label" data-i18n="modeGenerate">文生图</span>
+            </span>
+            <label class="composer-count">
+              <span data-i18n="imageCount">张数</span>
+              <select class="image-count-input">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+              </select>
+            </label>
+            <span class="composer-quota">
+              <i class="ri-coin-line"></i>
+              <span class="composer-quota-label" data-i18n="creditsRemain">剩余积分</span>
+              <strong class="composer-quota-value">--</strong>
+            </span>
             <label class="square-toggle">
               <span data-i18n="publishToSquare">公开到广场</span>
               <input class="public-input" type="checkbox">
@@ -215,6 +233,72 @@
             </label>
           </div>
         </form>
+      </template>
+
+      <template id="turnTemplate">
+        <article class="turn-card" data-turn-id="">
+          <header class="turn-head">
+            <div class="turn-prompt">
+              <span class="turn-mode-badge" data-mode="generate"></span>
+              <p class="turn-prompt-text"></p>
+            </div>
+            <div class="turn-meta">
+              <span class="turn-meta-chip turn-size"></span>
+              <span class="turn-meta-chip turn-model"></span>
+              <span class="turn-meta-chip turn-time"></span>
+            </div>
+            <div class="turn-actions">
+              <button type="button" class="turn-action turn-reuse" title="复用配置">
+                <i class="ri-magic-line"></i>
+                <span data-i18n="reuseConfig">复用</span>
+              </button>
+              <button type="button" class="turn-action turn-regenerate" title="重新生成整组">
+                <i class="ri-refresh-line"></i>
+                <span data-i18n="regenerateTurn">重生</span>
+              </button>
+              <button type="button" class="turn-action turn-delete" title="删除该轮">
+                <i class="ri-delete-bin-7-line"></i>
+              </button>
+            </div>
+          </header>
+          <div class="turn-references hidden"></div>
+          <div class="turn-status hidden"></div>
+          <div class="turn-error hidden"></div>
+          <div class="turn-grid"></div>
+        </article>
+      </template>
+
+      <template id="turnImageTemplate">
+        <figure class="turn-image" data-image-id="" data-status="loading">
+          <div class="turn-image-frame">
+            <div class="turn-image-skeleton">
+              <div class="turn-image-spinner"></div>
+              <span class="turn-image-status-text" data-i18n="generating">生成中...</span>
+            </div>
+            <img class="turn-image-pic hidden" alt="">
+            <div class="turn-image-error hidden">
+              <i class="ri-error-warning-line"></i>
+              <span class="turn-image-error-text"></span>
+            </div>
+            <div class="turn-image-actions">
+              <button type="button" class="turn-image-action" data-action="download" title="下载">
+                <i class="ri-download-line"></i>
+              </button>
+              <button type="button" class="turn-image-action" data-action="continue-edit" title="继续编辑">
+                <i class="ri-edit-2-line"></i>
+              </button>
+              <button type="button" class="turn-image-action" data-action="retry" title="重试此图">
+                <i class="ri-restart-line"></i>
+              </button>
+              <button type="button" class="turn-image-action" data-action="publish" title="公开到广场">
+                <i class="ri-broadcast-line"></i>
+              </button>
+              <button type="button" class="turn-image-action" data-action="lightbox" title="查看大图">
+                <i class="ri-fullscreen-line"></i>
+              </button>
+            </div>
+          </div>
+        </figure>
       </template>
 
       <div id="modalLayer" class="modal-layer hidden"></div>
