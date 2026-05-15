@@ -724,6 +724,7 @@ async function saveGeneratedImages(user, request, openaiResult, upstreamUsed = "
       conversationId: request.conversationId || null,
       operationType: request.operationType || "generate",
       sourceGenerationId: request.sourceGenerationId || null,
+      requestId: request.requestId || null,
       prompt: request.prompt,
       model: request.model,
       size: request.size,
@@ -1492,6 +1493,28 @@ async function routeApi(req, res, url) {
     return sendJson(res, 204, null);
   }
 
+  // Turn-grouped view of a conversation: one turn = one generation_request,
+  // mirroring the chatgpt2api workbench data model where each user submission
+  // produces N images grouped under a single turn card.
+  const convTurnsMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)\/turns$/);
+  if (convTurnsMatch && req.method === "GET") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    const conversation = await store.getConversationById(convTurnsMatch[1]);
+    if (!conversation || conversation.userId !== current.user.id) {
+      throw httpError("Conversation not found", 404);
+    }
+    const rawTurns = await store.listConversationTurns(conversation.id);
+    const turns = rawTurns.map((turn) => ({
+      ...turn,
+      images: turn.images.map((image) => ({
+        ...image,
+        imageUrl: `/api/images/${image.id}/file`
+      }))
+    }));
+    return sendJson(res, 200, { conversation, turns });
+  }
+
   if (req.method === "GET" && url.pathname === "/api/images/history") {
     const current = await getCurrentUser(req);
     ensureAuthenticated(current);
@@ -1539,6 +1562,7 @@ async function routeApi(req, res, url) {
     const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
     const totalCost = costPerImage * n;
     const activeModel = getUpstreamConfig(settings, "chatgpt2api").model;
+    const auditId = randomId("req_");
     const request = {
       model: String(activeModel || settings.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
       prompt,
@@ -1550,7 +1574,8 @@ async function routeApi(req, res, url) {
       isPublic: body.isPublic === true,
       conversationId,
       operationType: "generate",
-      sourceGenerationId
+      sourceGenerationId,
+      requestId: auditId
     };
     const openaiRequest = {
       model: request.model,
@@ -1561,7 +1586,6 @@ async function routeApi(req, res, url) {
       background: request.background,
       output_format: request.output_format
     };
-    const auditId = randomId("req_");
     await store.insertGenerationRequest({
       id: auditId,
       userId: user.id,
@@ -1679,6 +1703,7 @@ async function routeApi(req, res, url) {
     const sourceGenerationId = await resolveSourceGenerationForRequest(user, body.sourceGenerationId);
     const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
     const activeModel = getUpstreamConfig(settings, "chatgpt2api").model;
+    const auditId = randomId("req_");
     const request = {
       model: String(activeModel || settings.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
       prompt,
@@ -1690,9 +1715,9 @@ async function routeApi(req, res, url) {
       isPublic: body.isPublic === true,
       conversationId,
       operationType: "edit",
-      sourceGenerationId
+      sourceGenerationId,
+      requestId: auditId
     };
-    const auditId = randomId("req_");
     await store.insertGenerationRequest({
       id: auditId,
       userId: user.id,
@@ -1779,6 +1804,35 @@ async function routeApi(req, res, url) {
       }).catch((auditError) => console.error(auditError));
       throw error;
     }
+  }
+
+  const publishMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/publish$/);
+  if (publishMatch && req.method === "POST") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    const generation = await store.getGenerationById(publishMatch[1]);
+    if (!generation || !canTouchGeneration(current.user, generation)) {
+      throw httpError("Image not found", 404);
+    }
+    await store.setGenerationPublic(generation.id, true);
+    return sendJson(res, 200, { id: generation.id, isPublic: true });
+  }
+
+  const imageItemMatch = url.pathname.match(/^\/api\/images\/([^/]+)$/);
+  if (imageItemMatch && req.method === "DELETE") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    const generation = await store.getGenerationById(imageItemMatch[1]);
+    if (!generation || !canTouchGeneration(current.user, generation)) {
+      throw httpError("Image not found", 404);
+    }
+    try {
+      await fs.unlink(path.join(GENERATED_DIR, generation.filename));
+    } catch {
+      // file may already be gone — proceed with row deletion either way
+    }
+    await store.deleteGeneration(generation.id);
+    return sendJson(res, 200, { id: generation.id, deleted: true });
   }
 
   const fileMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/file$/);
