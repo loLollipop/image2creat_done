@@ -256,7 +256,7 @@ function renderDashboard() {
 
   $("#adminApp").innerHTML = `
     <div class="page-header">
-      <span class="kicker">Dashboard</span>
+      <span class="kicker">概览</span>
       <h1>仪表盘</h1>
       <p class="desc">GPT Image Studio 运行概览。</p>
     </div>
@@ -480,7 +480,7 @@ function renderUnifiedLogs() {
 
   panel.innerHTML = `
     <div class="page-header">
-      <span class="kicker">Logs</span>
+      <span class="kicker">日志</span>
       <h1>调用日志</h1>
       <p class="desc">查看上游 chatgpt2api 的调用与账号管理日志。</p>
       <div class="page-header-actions">
@@ -889,7 +889,7 @@ function renderAccounts() {
   const types = availableAccountTypes(state.accounts || []);
   target.innerHTML = `
     <div class="page-header">
-      <span class="kicker">Account Pool</span>
+      <span class="kicker">号池</span>
       <h1>号池管理</h1>
       <p class="desc">管理 ChatGPT 账号池，支持筛选、批量刷新、导出 Token、移除异常账号。</p>
       <div class="page-header-actions">
@@ -1154,7 +1154,7 @@ function renderRegister() {
   const target = $("#panel");
   target.innerHTML = `
     <div class="page-header">
-      <span class="kicker">Register</span>
+      <span class="kicker">注册机</span>
       <h1>注册机</h1>
       <p class="desc">自动注册流程。可配置多个邮箱提供商，按启用顺序轮换。</p>
       <div class="page-header-actions"><span id="regStatusBadge" class="status ${enabled ? "warn" : ""}">${enabled ? "运行中" : "已停止"}</span></div>
@@ -1367,7 +1367,7 @@ async function registerLifecycle(action) {
 function renderUsers() {
   $("#panel").innerHTML = `
     <div class="page-header">
-      <span class="kicker">Users</span>
+      <span class="kicker">用户</span>
       <h1>用户管理</h1>
       <p class="desc">管理注册用户，调整角色、状态和积分。</p>
     </div>
@@ -1406,7 +1406,7 @@ function renderRedeem() {
   const disabledCount = codes.filter((c) => c.status === "disabled").length;
   $("#panel").innerHTML = `
     <div class="page-header">
-      <span class="kicker">Redeem Codes</span>
+      <span class="kicker">卡密</span>
       <h1>卡密管理</h1>
       <p class="desc">创建和管理兑换卡密。</p>
     </div>
@@ -1525,7 +1525,7 @@ function renderTransactions() {
   const txs = state.transactions || [];
   $("#panel").innerHTML = `
     <div class="page-header">
-      <span class="kicker">Transactions</span>
+      <span class="kicker">流水</span>
       <h1>积分流水</h1>
       <p class="desc">查看所有用户的积分变动记录。</p>
     </div>
@@ -1557,7 +1557,7 @@ function renderPayments() {
   const payments = state.payments || [];
   $("#panel").innerHTML = `
     <div class="page-header">
-      <span class="kicker">Payments</span>
+      <span class="kicker">订单</span>
       <h1>支付订单</h1>
       <p class="desc">查看所有支付记录和订单状态。</p>
     </div>
@@ -1591,7 +1591,7 @@ function renderGenerations() {
   if (!panel) return;
   panel.innerHTML = `
     <div class="page-header">
-      <span class="kicker">Generations</span>
+      <span class="kicker">记录</span>
       <h1>生图记录</h1>
       <p class="desc">查看所有用户的生成记录，包括提示词、用户、IP 和状态信息。</p>
     </div>
@@ -1633,7 +1633,7 @@ function renderUpstreamSettings() {
   const storage = state.upstreamStorage;
 
   if (state.upstreamConfigError) {
-    target.innerHTML = `<div class="page-header"><span class="kicker">Upstream Settings</span><h1>上游设置</h1><p class="desc">管理 chatgpt2api 运行参数。</p></div><div class="card"><div class="empty" style="color:#e11d48">${escapeHtml(state.upstreamConfigError)}</div></div>`;
+    target.innerHTML = `<div class="page-header"><span class="kicker">上游</span><h1>上游设置</h1><p class="desc">管理 chatgpt2api 运行参数。</p></div><div class="card"><div class="empty" style="color:#e11d48">${escapeHtml(state.upstreamConfigError)}</div></div>`;
     return;
   }
 
@@ -1643,7 +1643,7 @@ function renderUpstreamSettings() {
 
   target.innerHTML = `
     <div class="page-header">
-      <span class="kicker">Upstream Settings</span>
+      <span class="kicker">上游</span>
       <h1>上游设置</h1>
       <p class="desc">管理 chatgpt2api 运行参数、代理、日志级别、敏感词和 AI 审核。</p>
       <div class="page-header-actions"><button class="primary" type="button" id="upstreamSaveBtn">保存配置</button></div>
@@ -1833,7 +1833,7 @@ function renderBackups() {
 
   target.innerHTML = `
     <div class="page-header">
-      <span class="kicker">Backup</span>
+      <span class="kicker">备份</span>
       <h1>备份管理</h1>
       <p class="desc">将关键数据定时备份到 Cloudflare R2，支持可选加密、轮替、手动执行与历史清理。</p>
       <div class="page-header-actions"><span class="status ${statusClass}">${statusLabel}</span></div>
@@ -2019,11 +2019,11 @@ function renderSettings() {
   const active = settings.activeUpstream || "chatgpt2api";
   $("#panel").innerHTML = `
     <div class="page-header">
-      <span class="kicker">Settings</span>
+      <span class="kicker">设置</span>
       <h1>接口设置</h1>
       <p class="desc">配置上游 API 接口、注册选项和积分策略。</p>
     </div>
-    <div class="grid">
+    <div class="settings-form-wrap">
       <section class="card">
         <form id="settingsForm" class="form">
           <fieldset class="upstream-group">

@@ -444,6 +444,10 @@ input[type="checkbox"] {
   align-items: start;
 }
 
+.grid-single {
+  max-width: 640px;
+}
+
 /* ===== Tabs (inline secondary tabs) ===== */
 .tabs {
   display: flex;
@@ -487,7 +491,7 @@ input[type="checkbox"] {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 860px;
+  min-width: 600px;
 }
 
 th, td {
@@ -513,8 +517,12 @@ tbody tr {
   transition: background var(--transition);
 }
 
+tbody tr:nth-child(even) {
+  background: var(--soft);
+}
+
 tbody tr:hover {
-  background: rgba(99,102,241,0.03);
+  background: rgba(99,102,241,0.05);
 }
 
 /* ===== Status Badges ===== */
@@ -840,7 +848,7 @@ td code {
   flex-wrap: wrap;
 }
 
-.account-table-wrap table { min-width: 980px; }
+.account-table-wrap table { min-width: 900px; }
 .account-table-wrap th { white-space: nowrap; }
 
 .account-table-wrap td .token-cell {
@@ -927,6 +935,33 @@ td code {
 .account-pagination .pager button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* ===== Settings single-column layout ===== */
+.settings-form-wrap {
+  max-width: 640px;
+}
+
+.settings-form-wrap .card {
+  padding: 28px;
+}
+
+.settings-form-wrap .upstream-group {
+  padding: 20px;
+}
+
+/* Table in-cell inputs */
+td input[type="number"],
+td select {
+  min-width: 80px;
+  max-width: 120px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+td select {
+  min-width: 90px;
+  max-width: 110px;
 }
 
 /* ===== Mobile ===== */
