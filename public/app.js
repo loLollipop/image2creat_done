@@ -610,9 +610,6 @@ function openWorkspace(options = {}) {
     openAuthModal("login");
     return;
   }
-  if (!state.activeConversationId) {
-    startNewConversation();
-  }
   setView("workspace");
   if (options.prompt) {
     state.draftPrompt = options.prompt;
