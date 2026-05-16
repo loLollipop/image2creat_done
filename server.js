@@ -38,6 +38,7 @@ const GENERATED_DIR = path.join(DATA_DIR, "generated");
 const PORT = Number(process.env.PORT || 3000);
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
+const MAX_PROXY_BODY_BYTES = 100 * 1024 * 1024;
 const DEFAULT_MODEL = "gpt-image-2";
 const DEFAULT_CHATGPT2API_BASE_URL = "http://chatgpt2api:80";
 const CHECKIN_CREDIT = Number.parseInt(process.env.CHECKIN_CREDIT || "1", 10) || 1;
@@ -1864,7 +1865,11 @@ async function routeApi(req, res, url) {
 
 async function serveStatic(req, res, url) {
   const pathname = decodeURIComponent(url.pathname);
-  const requestedPath = pathname === "/" ? "/index.html" : pathname === "/admin" ? "/admin.html" : pathname;
+  let requestedPath = pathname === "/" ? "/index.html" : pathname === "/admin" ? "/admin.html" : pathname;
+  // /playground/ → serve playground SPA index
+  if (requestedPath === "/playground" || requestedPath === "/playground/") {
+    requestedPath = "/playground/index.html";
+  }
   const absolutePath = path.normalize(path.join(PUBLIC_DIR, requestedPath));
   const isAssetRequest = path.extname(pathname) !== "";
   if (absolutePath !== PUBLIC_DIR && !absolutePath.startsWith(PUBLIC_DIR + path.sep)) {
@@ -1890,6 +1895,16 @@ async function serveStatic(req, res, url) {
     if (isAssetRequest) {
       return sendError(res, 404, "Static asset not found");
     }
+    // For paths under /playground/, fall back to playground SPA
+    if (pathname.startsWith("/playground")) {
+      const html = await fs.readFile(path.join(PUBLIC_DIR, "playground", "index.html"), "utf8");
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store"
+      });
+      res.end(html);
+      return;
+    }
     const html = await fs.readFile(path.join(PUBLIC_DIR, "index.html"), "utf8");
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
@@ -1899,9 +1914,321 @@ async function serveStatic(req, res, url) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// /api-proxy/ — OpenAI-compatible proxy for the embedded Playground SPA.
+// Authenticates via session cookie, deducts credits, then forwards to the
+// configured upstream (chatgpt2api / cpa).
+// ---------------------------------------------------------------------------
+
+async function readRawBody(req, limit = MAX_PROXY_BODY_BYTES) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw httpError("Request body is too large", 413);
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function routeApiProxy(req, res, url) {
+  const suffix = url.pathname.replace(/^\/api-proxy\//, "");
+
+  // POST /api-proxy/v1/images/generations
+  if (req.method === "POST" && (suffix === "v1/images/generations" || suffix === "images/generations")) {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    enforceGenerationRate(current.user.id);
+
+    const rawBody = await readRawBody(req);
+    const body = JSON.parse(rawBody.toString("utf8") || "{}");
+    const settings = await store.getSettings();
+    const upstreamId = getActiveUpstreamId(settings);
+    const cfg = getUpstreamConfig(settings, upstreamId);
+    if (!cfg.baseUrl || !cfg.apiKey) {
+      throw httpError("Upstream image API is not configured", 400);
+    }
+
+    const user = await store.getUserById(current.user.id);
+    if (!user || user.status !== "active") throw httpError("Account is not active", 403);
+
+    const n = Math.max(1, Math.min(Number(body.n) || 1, Number(settings.maxImagesPerRequest || 4)));
+    const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
+    const totalCost = costPerImage * n;
+    const auditId = randomId("pgp_");
+    const prompt = cleanPrompt(body.prompt);
+
+    await store.insertGenerationRequest({
+      id: auditId,
+      userId: user.id,
+      prompt,
+      ipAddress: getClientIp(req),
+      userAgent: getUserAgent(req),
+      isPublic: false,
+      status: "pending"
+    });
+
+    let reservedCredits = false;
+    if (totalCost > 0) {
+      reservedCredits = await store.reserveCredits(user.id, totalCost, {
+        type: "consume_generate",
+        refType: "generation_request",
+        refId: auditId,
+        note: "Playground image generation"
+      });
+      if (!reservedCredits) {
+        await store.updateGenerationRequest(auditId, { status: "failed", errorMessage: "Not enough credits" });
+        throw httpError("Not enough credits", 402);
+      }
+    }
+
+    try {
+      const model = String(body.model || cfg.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      const upstreamBody = {
+        model,
+        prompt,
+        n,
+        size: body.size || "auto",
+        response_format: "b64_json"
+      };
+      if (body.quality) upstreamBody.quality = body.quality;
+      if (body.background) upstreamBody.background = body.background;
+      if (body.output_format) upstreamBody.output_format = body.output_format;
+      if (body.moderation) upstreamBody.moderation = body.moderation;
+
+      const endpoint = joinUpstreamPath(cfg.baseUrl, "images/generations");
+      const upstreamRes = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cfg.apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(upstreamBody)
+      });
+
+      const upstreamText = await upstreamRes.text();
+      let upstreamData;
+      try { upstreamData = upstreamText ? JSON.parse(upstreamText) : {}; } catch { upstreamData = { raw: upstreamText }; }
+
+      if (!upstreamRes.ok) {
+        const msg = upstreamData?.error?.message || upstreamData?.detail || "Upstream image generation failed";
+        throw httpError(String(msg), upstreamRes.status, upstreamData);
+      }
+
+      await store.updateGenerationRequest(auditId, { status: "success" });
+      reservedCredits = false;
+
+      res.writeHead(upstreamRes.status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(upstreamText);
+    } catch (error) {
+      if (reservedCredits) {
+        await store.addCredits(user.id, totalCost, {
+          type: "refund_failure",
+          refType: "generation_request",
+          refId: auditId,
+          note: "Refund: playground generation failed"
+        }).catch((e) => console.error(e));
+      }
+      await store.updateGenerationRequest(auditId, {
+        status: "failed",
+        errorMessage: String(error.message || error).slice(0, 2000)
+      }).catch((e) => console.error(e));
+      throw error;
+    }
+    return;
+  }
+
+  // POST /api-proxy/v1/images/edits — multipart/form-data passthrough
+  if (req.method === "POST" && (suffix === "v1/images/edits" || suffix === "images/edits")) {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    enforceGenerationRate(current.user.id);
+
+    const settings = await store.getSettings();
+    const upstreamId = getActiveUpstreamId(settings);
+    const cfg = getUpstreamConfig(settings, upstreamId);
+    if (!cfg.baseUrl || !cfg.apiKey) {
+      throw httpError("Upstream image API is not configured", 400);
+    }
+
+    const user = await store.getUserById(current.user.id);
+    if (!user || user.status !== "active") throw httpError("Account is not active", 403);
+
+    const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
+    const auditId = randomId("pge_");
+
+    await store.insertGenerationRequest({
+      id: auditId,
+      userId: user.id,
+      prompt: "(playground edit)",
+      ipAddress: getClientIp(req),
+      userAgent: getUserAgent(req),
+      isPublic: false,
+      status: "pending"
+    });
+
+    let reservedCredits = false;
+    if (costPerImage > 0) {
+      reservedCredits = await store.reserveCredits(user.id, costPerImage, {
+        type: "consume_generate",
+        refType: "generation_request",
+        refId: auditId,
+        note: "Playground image edit"
+      });
+      if (!reservedCredits) {
+        await store.updateGenerationRequest(auditId, { status: "failed", errorMessage: "Not enough credits" });
+        throw httpError("Not enough credits", 402);
+      }
+    }
+
+    try {
+      const rawBody = await readRawBody(req);
+      const contentType = req.headers["content-type"] || "multipart/form-data";
+      const endpoint = joinUpstreamPath(cfg.baseUrl, "images/edits");
+      const upstreamRes = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cfg.apiKey}`,
+          "Content-Type": contentType
+        },
+        body: rawBody
+      });
+
+      const upstreamText = await upstreamRes.text();
+      if (!upstreamRes.ok) {
+        let msg;
+        try { msg = JSON.parse(upstreamText)?.error?.message || "Upstream image edit failed"; } catch { msg = "Upstream image edit failed"; }
+        throw httpError(String(msg), upstreamRes.status);
+      }
+
+      await store.updateGenerationRequest(auditId, { status: "success" });
+      reservedCredits = false;
+
+      res.writeHead(upstreamRes.status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(upstreamText);
+    } catch (error) {
+      if (reservedCredits) {
+        await store.addCredits(user.id, costPerImage, {
+          type: "refund_failure",
+          refType: "generation_request",
+          refId: auditId,
+          note: "Refund: playground edit failed"
+        }).catch((e) => console.error(e));
+      }
+      await store.updateGenerationRequest(auditId, {
+        status: "failed",
+        errorMessage: String(error.message || error).slice(0, 2000)
+      }).catch((e) => console.error(e));
+      throw error;
+    }
+    return;
+  }
+
+  // POST /api-proxy/v1/responses — Responses API passthrough
+  if (req.method === "POST" && (suffix === "v1/responses" || suffix === "responses")) {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    enforceGenerationRate(current.user.id);
+
+    const settings = await store.getSettings();
+    const cfg = getUpstreamConfig(settings);
+    if (!cfg.baseUrl || !cfg.apiKey) {
+      throw httpError("Upstream API is not configured", 400);
+    }
+
+    const user = await store.getUserById(current.user.id);
+    if (!user || user.status !== "active") throw httpError("Account is not active", 403);
+
+    const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
+    const auditId = randomId("pgr_");
+
+    await store.insertGenerationRequest({
+      id: auditId,
+      userId: user.id,
+      prompt: "(playground responses)",
+      ipAddress: getClientIp(req),
+      userAgent: getUserAgent(req),
+      isPublic: false,
+      status: "pending"
+    });
+
+    let reservedCredits = false;
+    if (costPerImage > 0) {
+      reservedCredits = await store.reserveCredits(user.id, costPerImage, {
+        type: "consume_generate",
+        refType: "generation_request",
+        refId: auditId,
+        note: "Playground responses API"
+      });
+      if (!reservedCredits) {
+        await store.updateGenerationRequest(auditId, { status: "failed", errorMessage: "Not enough credits" });
+        throw httpError("Not enough credits", 402);
+      }
+    }
+
+    try {
+      const rawBody = await readRawBody(req);
+      const endpoint = joinUpstreamPath(cfg.baseUrl, "responses");
+      const upstreamRes = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cfg.apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: rawBody
+      });
+
+      const upstreamText = await upstreamRes.text();
+      if (!upstreamRes.ok) {
+        let msg;
+        try { msg = JSON.parse(upstreamText)?.error?.message || "Upstream responses API failed"; } catch { msg = "Upstream responses API failed"; }
+        throw httpError(String(msg), upstreamRes.status);
+      }
+
+      await store.updateGenerationRequest(auditId, { status: "success" });
+      reservedCredits = false;
+
+      res.writeHead(upstreamRes.status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(upstreamText);
+    } catch (error) {
+      if (reservedCredits) {
+        await store.addCredits(user.id, costPerImage, {
+          type: "refund_failure",
+          refType: "generation_request",
+          refId: auditId,
+          note: "Refund: playground responses failed"
+        }).catch((e) => console.error(e));
+      }
+      await store.updateGenerationRequest(auditId, {
+        status: "failed",
+        errorMessage: String(error.message || error).slice(0, 2000)
+      }).catch((e) => console.error(e));
+      throw error;
+    }
+    return;
+  }
+
+  // GET /api-proxy/v1/models — return the configured model
+  if (req.method === "GET" && (suffix === "v1/models" || suffix === "models")) {
+    const settings = await store.getSettings();
+    const cfg = getUpstreamConfig(settings);
+    const model = cfg.model || DEFAULT_MODEL;
+    return sendJson(res, 200, {
+      object: "list",
+      data: [{ id: model, object: "model", owned_by: "system" }]
+    });
+  }
+
+  sendError(res, 404, "Proxy route not found");
+}
+
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   try {
+    if (url.pathname.startsWith("/api-proxy/")) {
+      await routeApiProxy(req, res, url);
+      return;
+    }
     if (url.pathname.startsWith("/api/")) {
       await routeApi(req, res, url);
       return;
