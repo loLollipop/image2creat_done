@@ -2023,8 +2023,7 @@ function renderSettings() {
       <h1>接口设置</h1>
       <p class="desc">配置上游 API 接口、注册选项和积分策略。</p>
     </div>
-    <div class="settings-form-wrap">
-      <section class="card">
+    <div class="card">
         <form id="settingsForm" class="form">
           <fieldset class="upstream-group">
             <legend>当前启用上游</legend>
@@ -2083,7 +2082,6 @@ function renderSettings() {
 
           <button class="primary" type="submit">保存设置</button>
         </form>
-      </section>
     </div>
   `;
   $("#settingsForm").addEventListener("submit", saveSettings);
