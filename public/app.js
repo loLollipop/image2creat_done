@@ -10,6 +10,7 @@ const state = {
   generating: false,
   funIndex: 0,
   funTimer: null,
+  thinkingStartTime: null,
   draftPrompt: "",
   generationOptions: {
     size: "auto",
@@ -52,6 +53,7 @@ const i18n = {
     reviews: "生成后会自动保存到你的图库",
     todayGeneratedPrefix: "今日已生成",
     todayGeneratedSuffix: "张图片",
+    newChat: "新聊天",
     recentTitle: "最近创作",
     recentSubtitle: "来自你的灵感",
     examplesLabel: "灵感示例",
@@ -191,6 +193,7 @@ const i18n = {
     reviews: "Generated images are saved to your gallery",
     todayGeneratedPrefix: "Today generated",
     todayGeneratedSuffix: "images",
+    newChat: "New Chat",
     recentTitle: "Recent Creations",
     recentSubtitle: "Your creative history",
     examplesLabel: "Inspiration",
@@ -603,7 +606,16 @@ function setComposerReference({ url = "", imageData = "", name = "", sourceGener
 }
 
 function openWorkspace(options = {}) {
-  window.location.href = "/playground/";
+  if (!state.user) {
+    openAuthModal("login");
+    return;
+  }
+  setView("workspace");
+  if (options.prompt) {
+    state.draftPrompt = options.prompt;
+    syncComposers();
+  }
+  scrollToBottom(false);
 }
 
 function renderAll() {
@@ -747,30 +759,34 @@ function updateCustomSizeVisibility(form) {
 function syncComposers(sourceForm) {
   const isImageEdit = state.references.length > 0;
   const maxImages = Math.max(1, Number(state.settings?.maxImagesPerRequest) || 1);
-  // Image-to-image at chatgpt2api currently returns exactly one image even when n>1
-  // is requested, so we lock the count to 1 in edit mode like the upstream UI does.
   const effectiveMax = isImageEdit ? 1 : maxImages;
   const desiredCount = String(Math.min(effectiveMax, Math.max(1, Number(state.imageCount) || 1)));
   state.imageCount = desiredCount;
   $$(".composer").forEach((form) => {
     if (form !== sourceForm) {
       $(".prompt-box", form).value = state.draftPrompt;
-      const mode = state.generationOptions.sizeMode || state.generationOptions.size;
-      $(".size-input", form).value = [...$(".size-input", form).options].some((option) => option.value === mode) ? mode : "custom";
-      $(".custom-width-input", form).value = state.generationOptions.customWidth || "2048";
-      $(".custom-height-input", form).value = state.generationOptions.customHeight || "2048";
-      $(".quality-input", form).value = state.generationOptions.quality;
-      $(".background-input", form).value = state.generationOptions.background;
-      $(".format-input", form).value = state.generationOptions.outputFormat;
-      $(".public-input", form).checked = state.publishToSquare;
+      const sizeInput = $(".size-input", form);
+      if (sizeInput) {
+        const mode = state.generationOptions.sizeMode || state.generationOptions.size;
+        sizeInput.value = [...sizeInput.options].some((option) => option.value === mode) ? mode : "custom";
+      }
+      const cwi = $(".custom-width-input", form);
+      const chi = $(".custom-height-input", form);
+      if (cwi) cwi.value = state.generationOptions.customWidth || "2048";
+      if (chi) chi.value = state.generationOptions.customHeight || "2048";
+      const qi = $(".quality-input", form);
+      const bi = $(".background-input", form);
+      const fi = $(".format-input", form);
+      const pi = $(".public-input", form);
+      if (qi) qi.value = state.generationOptions.quality;
+      if (bi) bi.value = state.generationOptions.background;
+      if (fi) fi.value = state.generationOptions.outputFormat;
+      if (pi) pi.checked = state.publishToSquare;
     }
     updateCustomSizeVisibility(form);
-    $(".model-label", form).textContent = "gpt-image-2";
-    const actionText = isImageEdit
-      ? (state.lang === "zh" ? "修改" : "Edit")
-      : text("create");
-    const submitLabel = $(".send-button span", form);
-    if (submitLabel) submitLabel.textContent = actionText;
+    const modelLabel = $(".model-label", form);
+    if (modelLabel) modelLabel.textContent = "gpt-image-2";
+
     const qualityInput = $(".quality-input", form);
     const backgroundInput = $(".background-input", form);
     const formatInput = $(".format-input", form);
@@ -779,18 +795,7 @@ function syncComposers(sourceForm) {
     if (formatInput) formatInput.disabled = isImageEdit;
     $(".send-button", form).disabled = state.generating || !state.settings?.hasApiKey;
 
-    // Sync mode badge (文生图 vs 图生图)
-    const modeBadge = $(".composer-mode-badge", form);
-    if (modeBadge) {
-      const modeLabel = $(".composer-mode-label", modeBadge);
-      modeBadge.dataset.mode = isImageEdit ? "edit" : "generate";
-      if (modeLabel) {
-        modeLabel.textContent = isImageEdit ? text("modeEdit") : text("modeGenerate");
-      }
-    }
-
-    // Sync image-count selector. Disable in edit mode (image-to-image only ever
-    // returns 1 image upstream).
+    // Sync image-count selector.
     const countInput = $(".image-count-input", form);
     const countContainer = $(".composer-count", form);
     if (countInput) {
@@ -1022,19 +1027,28 @@ async function submitGeneration(form) {
 
 function startFunMessages() {
   stopFunMessages();
-  state.funIndex = 0;
+  state.thinkingStartTime = Date.now();
   elements.generationStatus.classList.remove("hidden");
-  elements.funMessage.textContent = text("funMsgs")[0];
-  state.funTimer = setInterval(() => {
-    const messages = text("funMsgs");
-    state.funIndex = (state.funIndex + 1) % messages.length;
-    elements.funMessage.textContent = messages[state.funIndex];
-  }, 3000);
+  updateThinkingTime();
+  state.funTimer = setInterval(updateThinkingTime, 1000);
+}
+
+function updateThinkingTime() {
+  if (!state.thinkingStartTime) return;
+  const elapsed = Math.floor((Date.now() - state.thinkingStartTime) / 1000);
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+  const timeStr = minutes > 0
+    ? `${minutes}m ${seconds}s`
+    : `${seconds}s`;
+  const label = state.lang === "zh" ? "思考中" : "Thinking";
+  elements.funMessage.textContent = `${label} ${timeStr}`;
 }
 
 function stopFunMessages() {
   if (state.funTimer) clearInterval(state.funTimer);
   state.funTimer = null;
+  state.thinkingStartTime = null;
   elements.generationStatus.classList.add("hidden");
 }
 
@@ -1157,12 +1171,16 @@ function groupHistoryIntoTurns(items) {
 }
 
 function renderHistory() {
+  // Update sidebar username
+  const sidebarUserName = document.getElementById("sidebarUserName");
+  if (sidebarUserName) sidebarUserName.textContent = state.user?.name || state.user?.email || "";
+
   if (!state.history.length) {
     elements.historyList.innerHTML = `
       <section class="workspace-empty-state">
-        <span class="config-chip">${escapeHtml(state.lang === "zh" ? "图片创作工作区" : "Image creation workspace")}</span>
-        <h2>${escapeHtml(state.lang === "zh" ? "描述需求，开始生成或继续修改图片" : "Describe what you need and generate or refine images")}</h2>
-        <p>${escapeHtml(state.lang === "zh" ? "支持文生图，也支持直接上传现有图片继续修改，适合商品图、海报图和详情页素材的连续迭代。" : "Generate from text or upload an existing image to keep refining product shots, posters, and marketing assets in one thread.")}</p>
+        <div class="empty-state-icon"><i class="ri-sparkling-2-fill"></i></div>
+        <h2>${escapeHtml(state.lang === "zh" ? "有什么可以帮忙的？" : "What can I help with?")}</h2>
+        <p>${escapeHtml(state.lang === "zh" ? "描述你想生成的图片，或上传图片继续修改" : "Describe the image you want, or upload one to keep editing")}</p>
       </section>
     `;
     return;
@@ -1189,12 +1207,7 @@ function renderTurnCard(turn) {
   card.dataset.turnId = turn.id;
   card.dataset.status = turn.status;
 
-  // Mode badge + prompt text.
-  const modeBadge = $(".turn-mode-badge", card);
-  if (modeBadge) {
-    modeBadge.dataset.mode = turn.operationType === "edit" ? "edit" : "generate";
-    modeBadge.textContent = turn.operationType === "edit" ? text("modeEdit") : text("modeGenerate");
-  }
+  // User message bubble: prompt text.
   $(".turn-prompt-text", card).textContent = turn.prompt || "";
 
   // Meta chips (size / model / time).

@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/remixicon@4.6.0/fonts/remixicon.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="./styles.css?v=20260513b">
+    <link rel="stylesheet" href="./styles.css?v=20260515a">
   </head>
   <body>
     <div id="app" class="app">
@@ -100,19 +100,23 @@
         <section class="workspace-shell">
           <aside class="workspace-sidebar">
             <div class="workspace-sidebar-header">
-              <div>
-                <span class="workspace-sidebar-kicker">Workspace</span>
-                <strong>创作会话</strong>
-              </div>
-              <button id="workspaceNewBtn" class="workspace-new-btn" type="button"><i class="ri-add-line"></i> 新建</button>
+              <button id="workspaceNewBtn" class="workspace-new-btn" type="button"><i class="ri-add-line"></i> <span data-i18n="newChat">新聊天</span></button>
             </div>
             <div id="workspaceConvList" class="workspace-conv-list"></div>
+            <div class="workspace-sidebar-footer">
+              <div class="sidebar-user-info">
+                <i class="ri-user-3-line"></i>
+                <span id="sidebarUserName"></span>
+              </div>
+            </div>
           </aside>
           <section class="workspace-main">
             <div id="workspaceThread" class="workspace-thread">
               <div id="generationStatus" class="generation-status hidden">
-                <div class="paint-drip" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
-                <span id="funMessage">Generating...</span>
+                <div class="thinking-indicator">
+                  <div class="thinking-dot-group"><span></span><span></span><span></span></div>
+                  <span id="funMessage">思考中...</span>
+                </div>
               </div>
               <div id="historyList" class="history-list"></div>
               <div class="bottom-spacer"></div>
@@ -140,131 +144,125 @@
 
       <template id="composerTemplate">
         <form class="composer">
-          <div class="composer-head">
-            <button class="model-chip options-toggle" type="button">
-              <span class="model-label">gpt-image-2</span>
-            </button>
-            <span class="composer-mode-badge" data-mode="generate">
-              <i class="ri-sparkling-2-line"></i>
-              <span class="composer-mode-label" data-i18n="modeGenerate">文生图</span>
-            </span>
-            <label class="composer-count">
-              <span data-i18n="imageCount">张数</span>
-              <select class="image-count-input">
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-                <option value="4">4</option>
-              </select>
-            </label>
-            <span class="composer-quota">
-              <i class="ri-coin-line"></i>
-              <span class="composer-quota-label" data-i18n="creditsRemain">剩余积分</span>
-              <strong class="composer-quota-value">--</strong>
-            </span>
-            <label class="square-toggle">
-              <span data-i18n="publishToSquare">公开到广场</span>
-              <input class="public-input" type="checkbox">
-              <span class="toggle-track" aria-hidden="true"></span>
-            </label>
-          </div>
           <div class="reference-row hidden"></div>
           <div class="composer-bar">
             <label class="add-reference-button" title="Reference image">
               <i class="ri-add-line"></i>
               <input class="reference-input" type="file" accept="image/*" multiple>
             </label>
-            <textarea class="prompt-box" rows="1" placeholder="描述你想创作的图片..."></textarea>
-            <div class="composer-spacer"></div>
-            <button class="send-button" type="submit">
-              <span data-i18n="create">生成</span>
-            </button>
+            <textarea class="prompt-box" rows="1" placeholder="有问题，尽管问"></textarea>
+            <div class="composer-right-controls">
+              <button class="options-toggle-btn options-toggle" type="button" title="参数设置"><i class="ri-settings-3-line"></i></button>
+              <button class="send-button" type="submit" title="发送">
+                <i class="ri-arrow-up-line"></i>
+              </button>
+            </div>
           </div>
           <div class="advanced-options hidden">
-            <label>
-              <span data-i18n="size">尺寸</span>
-              <select class="size-input">
-                <option value="auto">Auto</option>
-                <option value="1024x1024">1:1</option>
-                <option value="1024x1536">2:3</option>
-                <option value="1536x1024">3:2</option>
-                <option value="2048x2048">2K 1:1</option>
-                <option value="2048x3072">2K 2:3</option>
-                <option value="3072x2048">2K 3:2</option>
-                <option value="2880x3840">4K 3:4</option>
-                <option value="3840x2880">4K 4:3</option>
-                <option value="custom">自定义</option>
-              </select>
-            </label>
-            <div class="custom-size-row hidden">
+            <div class="advanced-options-row">
               <label>
-                <span>宽度</span>
-                <input class="custom-width-input" type="number" min="1024" max="3840" step="16" value="2048">
+                <span class="model-label">gpt-image-2</span>
+              </label>
+              <label class="composer-count">
+                <span data-i18n="imageCount">张数</span>
+                <select class="image-count-input">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                </select>
               </label>
               <label>
-                <span>高度</span>
-                <input class="custom-height-input" type="number" min="1024" max="3840" step="16" value="2048">
+                <span data-i18n="size">尺寸</span>
+                <select class="size-input">
+                  <option value="auto">Auto</option>
+                  <option value="1024x1024">1:1</option>
+                  <option value="1024x1536">2:3</option>
+                  <option value="1536x1024">3:2</option>
+                  <option value="2048x2048">2K 1:1</option>
+                  <option value="2048x3072">2K 2:3</option>
+                  <option value="3072x2048">2K 3:2</option>
+                  <option value="2880x3840">4K 3:4</option>
+                  <option value="3840x2880">4K 4:3</option>
+                  <option value="custom">自定义</option>
+                </select>
               </label>
+              <div class="custom-size-row hidden">
+                <label>
+                  <span>宽度</span>
+                  <input class="custom-width-input" type="number" min="1024" max="3840" step="16" value="2048">
+                </label>
+                <label>
+                  <span>高度</span>
+                  <input class="custom-height-input" type="number" min="1024" max="3840" step="16" value="2048">
+                </label>
+              </div>
+              <label>
+                <span data-i18n="quality">质量</span>
+                <select class="quality-input">
+                  <option value="auto">Auto</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
+              <label>
+                <span data-i18n="background">背景</span>
+                <select class="background-input">
+                  <option value="auto">Auto</option>
+                  <option value="opaque">Opaque</option>
+                  <option value="transparent">Transparent</option>
+                </select>
+              </label>
+              <label>
+                <span data-i18n="format">格式</span>
+                <select class="format-input">
+                  <option value="png">PNG</option>
+                  <option value="webp">WebP</option>
+                  <option value="jpeg">JPEG</option>
+                </select>
+              </label>
+              <label class="square-toggle">
+                <span data-i18n="publishToSquare">公开到广场</span>
+                <input class="public-input" type="checkbox">
+                <span class="toggle-track" aria-hidden="true"></span>
+              </label>
+              <span class="composer-quota">
+                <i class="ri-coin-line"></i>
+                <span class="composer-quota-label" data-i18n="creditsRemain">剩余</span>
+                <strong class="composer-quota-value">--</strong>
+              </span>
             </div>
-            <label>
-              <span data-i18n="quality">质量</span>
-              <select class="quality-input">
-                <option value="auto">Auto</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-            </label>
-            <label>
-              <span data-i18n="background">背景</span>
-              <select class="background-input">
-                <option value="auto">Auto</option>
-                <option value="opaque">Opaque</option>
-                <option value="transparent">Transparent</option>
-              </select>
-            </label>
-            <label>
-              <span data-i18n="format">格式</span>
-              <select class="format-input">
-                <option value="png">PNG</option>
-                <option value="webp">WebP</option>
-                <option value="jpeg">JPEG</option>
-              </select>
-            </label>
           </div>
         </form>
       </template>
 
       <template id="turnTemplate">
         <article class="turn-card" data-turn-id="">
-          <header class="turn-head">
-            <div class="turn-prompt">
-              <span class="turn-mode-badge" data-mode="generate"></span>
+          <div class="chat-msg chat-msg-user">
+            <div class="chat-msg-content">
+              <div class="turn-references hidden"></div>
               <p class="turn-prompt-text"></p>
             </div>
-            <div class="turn-meta">
-              <span class="turn-meta-chip turn-size"></span>
-              <span class="turn-meta-chip turn-model"></span>
-              <span class="turn-meta-chip turn-time"></span>
+          </div>
+          <div class="chat-msg chat-msg-ai">
+            <div class="chat-msg-avatar"><i class="ri-sparkling-2-fill"></i></div>
+            <div class="chat-msg-content">
+              <div class="turn-status hidden"></div>
+              <div class="turn-error hidden"></div>
+              <div class="turn-grid"></div>
+              <div class="chat-msg-actions">
+                <button type="button" class="chat-action-btn turn-reuse" title="复用配置"><i class="ri-file-copy-line"></i></button>
+                <button type="button" class="chat-action-btn turn-regenerate" title="重新生成"><i class="ri-refresh-line"></i></button>
+                <button type="button" class="chat-action-btn turn-delete" title="删除"><i class="ri-delete-bin-line"></i></button>
+              </div>
+              <div class="turn-meta">
+                <span class="turn-meta-chip turn-size"></span>
+                <span class="turn-meta-chip turn-model"></span>
+                <span class="turn-meta-chip turn-time"></span>
+              </div>
             </div>
-            <div class="turn-actions">
-              <button type="button" class="turn-action turn-reuse" title="复用配置">
-                <i class="ri-magic-line"></i>
-                <span data-i18n="reuseConfig">复用</span>
-              </button>
-              <button type="button" class="turn-action turn-regenerate" title="重新生成整组">
-                <i class="ri-refresh-line"></i>
-                <span data-i18n="regenerateTurn">重生</span>
-              </button>
-              <button type="button" class="turn-action turn-delete" title="删除该轮">
-                <i class="ri-delete-bin-7-line"></i>
-              </button>
-            </div>
-          </header>
-          <div class="turn-references hidden"></div>
-          <div class="turn-status hidden"></div>
-          <div class="turn-error hidden"></div>
-          <div class="turn-grid"></div>
+          </div>
         </article>
       </template>
 
@@ -287,12 +285,6 @@
               <button type="button" class="turn-image-action" data-action="continue-edit" title="继续编辑">
                 <i class="ri-edit-2-line"></i>
               </button>
-              <button type="button" class="turn-image-action" data-action="retry" title="重试此图">
-                <i class="ri-restart-line"></i>
-              </button>
-              <button type="button" class="turn-image-action" data-action="publish" title="公开到广场">
-                <i class="ri-broadcast-line"></i>
-              </button>
               <button type="button" class="turn-image-action" data-action="lightbox" title="查看大图">
                 <i class="ri-fullscreen-line"></i>
               </button>
@@ -305,6 +297,6 @@
       <div id="toastLayer" class="toast-layer"></div>
     </div>
 
-    <script src="./app.js?v=20260513b" defer></script>
+    <script src="./app.js?v=20260515a" defer></script>
   </body>
 </html>
