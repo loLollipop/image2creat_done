@@ -35,13 +35,16 @@ const upstreamApi = require("./src/upstream-api-client");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(ROOT_DIR, "data"));
 const GENERATED_DIR = path.join(DATA_DIR, "generated");
+const AVATAR_DIR = path.join(DATA_DIR, "avatars");
 const PORT = Number(process.env.PORT || 3000);
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
-const MAX_PROXY_BODY_BYTES = 100 * 1024 * 1024;
+const MAX_EDIT_IMAGE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MODEL = "gpt-image-2";
 const DEFAULT_CHATGPT2API_BASE_URL = "http://chatgpt2api:80";
 const CHECKIN_CREDIT = Number.parseInt(process.env.CHECKIN_CREDIT || "1", 10) || 1;
+const ALLOWED_IMAGE_SIZES = ["auto", "1024x1024", "1024x1536", "1536x1024"];
+const ALLOWED_IMAGE_SIZE_SET = new Set(ALLOWED_IMAGE_SIZES);
 
 const generationWindows = new Map();
 
@@ -141,6 +144,9 @@ function verifyPassword(password, passwordHash) {
 }
 
 function serializeUser(user) {
+  const avatarUrl = user.avatarFilename
+    ? `/api/users/${encodeURIComponent(user.id)}/avatar?ts=${encodeURIComponent(user.updatedAt || "")}`
+    : "";
   return {
     id: user.id,
     name: user.name,
@@ -148,6 +154,7 @@ function serializeUser(user) {
     role: user.role,
     status: user.status,
     credits: user.credits,
+    avatarUrl,
     createdAt: user.createdAt
   };
 }
@@ -249,7 +256,8 @@ function publicSettings(settings) {
     defaultCredits: Number(settings.defaultCredits || 0),
     generationCreditCost: Number(settings.generationCreditCost ?? 1),
     checkinCredit: CHECKIN_CREDIT,
-    maxImagesPerRequest: Number(settings.maxImagesPerRequest || 1)
+    maxImagesPerRequest: Number(settings.maxImagesPerRequest || 1),
+    allowedImageSizes: [...ALLOWED_IMAGE_SIZES]
   };
 }
 
@@ -354,29 +362,10 @@ function sanitizePositiveInt(value, fallback, max) {
 
 function normalizeImageSize(value) {
   const raw = String(value || "auto").trim().toLowerCase();
-  if (raw === "auto") return "auto";
-  const match = raw.match(/^(\d{3,4})x(\d{3,4})$/);
-  if (!match) {
-    throw httpError("Invalid image size. Use auto or WIDTHxHEIGHT, for example 2048x2048.", 400);
+  if (!ALLOWED_IMAGE_SIZE_SET.has(raw)) {
+    throw httpError(`Invalid image size. Supported sizes: ${ALLOWED_IMAGE_SIZES.join(", ")}.`, 400);
   }
-  const width = Number.parseInt(match[1], 10);
-  const height = Number.parseInt(match[2], 10);
-  const pixels = width * height;
-  const shortSide = Math.min(width, height);
-  const longSide = Math.max(width, height);
-  if (width > 3840 || height > 3840) {
-    throw httpError("Image size cannot exceed 3840x3840.", 400);
-  }
-  if (width % 16 !== 0 || height % 16 !== 0) {
-    throw httpError("Image width and height must be multiples of 16.", 400);
-  }
-  if (pixels < 655360 || pixels > 8294400) {
-    throw httpError("Image pixels must be between 655,360 and 8,294,400.", 400);
-  }
-  if (longSide / shortSide > 3) {
-    throw httpError("Image aspect ratio cannot exceed 3:1.", 400);
-  }
-  return `${width}x${height}`;
+  return raw;
 }
 
 function ensureAdmin(current) {
@@ -576,17 +565,27 @@ async function callOpenAIResponses(settings, payload) {
   return data;
 }
 
-function dataUrlToBlob(dataUrl) {
-  const match = String(dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) throw httpError("Invalid image data", 400);
-  return new Blob([Buffer.from(match[2], "base64")], { type: match[1] });
+function assertEditImageSize(buffer, label = "Image") {
+  if (buffer.length > MAX_EDIT_IMAGE_BYTES) {
+    throw httpError(`${label} is too large. Max 8 MiB.`, 413);
+  }
 }
 
-async function imageSourceToBlob(source) {
-  if (String(source).startsWith("data:")) return dataUrlToBlob(source);
+function dataUrlToBlob(dataUrl, label = "Image") {
+  const match = String(dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) throw httpError("Invalid image data", 400);
+  const buffer = Buffer.from(match[2], "base64");
+  assertEditImageSize(buffer, label);
+  return new Blob([buffer], { type: match[1] });
+}
+
+async function imageSourceToBlob(source, label = "Image") {
+  if (String(source).startsWith("data:")) return dataUrlToBlob(source, label);
   const response = await fetch(source);
   if (!response.ok) throw httpError(`Editable image download failed: ${response.status}`, 400);
-  return new Blob([Buffer.from(await response.arrayBuffer())], {
+  const buffer = Buffer.from(await response.arrayBuffer());
+  assertEditImageSize(buffer, label);
+  return new Blob([buffer], {
     type: response.headers.get("content-type") || "image/png"
   });
 }
@@ -606,9 +605,9 @@ async function callOpenAIImageEdits(settings, payload) {
   form.set("n", String(payload.n || 1));
   form.set("size", payload.size || "auto");
   form.set("response_format", "url");
-  form.set("image", await imageSourceToBlob(payload.imageData), "image.png");
+  form.set("image", await imageSourceToBlob(payload.imageData, "Editable image"), "image.png");
   if (payload.maskData?.startsWith("data:image/")) {
-    form.set("mask", dataUrlToBlob(payload.maskData), "mask.png");
+    form.set("mask", dataUrlToBlob(payload.maskData, "Mask image"), "mask.png");
   }
 
   const response = await fetch(getOpenAIEditEndpoint(settings), {
@@ -748,6 +747,22 @@ async function saveGeneratedImages(user, request, openaiResult, upstreamUsed = "
   return saved;
 }
 
+async function saveAvatarImage(userId, avatarData) {
+  await fs.mkdir(AVATAR_DIR, { recursive: true });
+  const avatarFile = await imageItemToBuffer({ b64_json: avatarData }, { output_format: "png" });
+  if (!avatarFile?.buffer?.length) {
+    throw httpError("Avatar image is invalid", 400);
+  }
+  const filename = `${userId}_${randomId("avatar_")}.${avatarFile.extension}`;
+  await fs.writeFile(path.join(AVATAR_DIR, filename), avatarFile.buffer);
+  return filename;
+}
+
+async function deleteStoredAvatar(filename) {
+  if (!filename) return;
+  await fs.unlink(path.join(AVATAR_DIR, filename)).catch(() => null);
+}
+
 async function routeApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/health") {
     const settings = await store.getSettings();
@@ -770,6 +785,51 @@ async function routeApi(req, res, url) {
       },
       settings: publicSettings(settings)
     });
+  }
+
+  if (req.method === "PATCH" && url.pathname === "/api/auth/me") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    const body = await readJsonBody(req);
+    const patch = {};
+    const nextName = Object.hasOwn(body, "name") ? String(body.name || "").trim() : "";
+    const avatarData = String(body.avatarData || "").trim();
+    const currentPassword = String(body.currentPassword || "");
+    const newPassword = String(body.newPassword || "");
+    if (Object.hasOwn(body, "name")) {
+      if (!nextName) throw httpError("Name is required", 400);
+      patch.name = nextName.slice(0, 60);
+    }
+    if (currentPassword || newPassword) {
+      if (!currentPassword || !newPassword) {
+        throw httpError("Current password and new password are required", 400);
+      }
+      if (!verifyPassword(currentPassword, current.user.passwordHash)) {
+        throw httpError("Current password is incorrect", 401);
+      }
+      requirePassword(newPassword);
+      patch.passwordHash = hashPassword(newPassword);
+    }
+    if (avatarData) {
+      if (!avatarData.startsWith("data:image/")) {
+        throw httpError("Please provide a valid avatar image", 400);
+      }
+    }
+    let newAvatarFilename = "";
+    try {
+      if (avatarData) {
+        newAvatarFilename = await saveAvatarImage(current.user.id, avatarData);
+        patch.avatarFilename = newAvatarFilename;
+      }
+      const updatedUser = await store.updateUserProfile(current.user.id, patch);
+      if (newAvatarFilename && current.user.avatarFilename && current.user.avatarFilename !== newAvatarFilename) {
+        await deleteStoredAvatar(current.user.avatarFilename);
+      }
+      return sendJson(res, 200, { user: serializeUser(updatedUser) });
+    } catch (error) {
+      if (newAvatarFilename) await deleteStoredAvatar(newAvatarFilename);
+      throw error;
+    }
   }
 
   if (req.method === "POST" && url.pathname === "/api/auth/register") {
@@ -1680,6 +1740,9 @@ async function routeApi(req, res, url) {
     enforceGenerationRate(current.user.id);
 
     const body = await readJsonBody(req);
+    if (Array.isArray(body.imageData) || Array.isArray(body.images)) {
+      throw httpError("Only one editable image is supported", 400);
+    }
     const prompt = cleanPrompt(body.prompt);
     const imageData = String(body.imageData || "").trim();
     const maskData = String(body.maskData || "").trim();
@@ -1807,33 +1870,26 @@ async function routeApi(req, res, url) {
     }
   }
 
-  const publishMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/publish$/);
-  if (publishMatch && req.method === "POST") {
+  const avatarMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/avatar$/);
+  if (avatarMatch && req.method === "GET") {
     const current = await getCurrentUser(req);
     ensureAuthenticated(current);
-    const generation = await store.getGenerationById(publishMatch[1]);
-    if (!generation || !canTouchGeneration(current.user, generation)) {
-      throw httpError("Image not found", 404);
+    const user = await store.getUserById(avatarMatch[1]);
+    if (!user?.avatarFilename) {
+      throw httpError("Avatar not found", 404);
     }
-    await store.setGenerationPublic(generation.id, true);
-    return sendJson(res, 200, { id: generation.id, isPublic: true });
-  }
-
-  const imageItemMatch = url.pathname.match(/^\/api\/images\/([^/]+)$/);
-  if (imageItemMatch && req.method === "DELETE") {
-    const current = await getCurrentUser(req);
-    ensureAuthenticated(current);
-    const generation = await store.getGenerationById(imageItemMatch[1]);
-    if (!generation || !canTouchGeneration(current.user, generation)) {
-      throw httpError("Image not found", 404);
+    if (current.user.id !== user.id && current.user.role !== "admin") {
+      throw httpError("Avatar not found", 404);
     }
-    try {
-      await fs.unlink(path.join(GENERATED_DIR, generation.filename));
-    } catch {
-      // file may already be gone — proceed with row deletion either way
-    }
-    await store.deleteGeneration(generation.id);
-    return sendJson(res, 200, { id: generation.id, deleted: true });
+    const absolutePath = path.join(AVATAR_DIR, user.avatarFilename);
+    const extension = path.extname(user.avatarFilename).toLowerCase();
+    const bytes = await fs.readFile(absolutePath);
+    res.writeHead(200, {
+      "Content-Type": mimeTypes.get(extension) || "application/octet-stream",
+      "Cache-Control": "private, no-store"
+    });
+    res.end(bytes);
+    return;
   }
 
   const fileMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/file$/);

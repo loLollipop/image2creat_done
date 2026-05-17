@@ -1,3 +1,6 @@
+const DEFAULT_ALLOWED_IMAGE_SIZES = ["auto", "1024x1024", "1024x1536", "1536x1024"];
+const MAX_EDIT_UPLOAD_BYTES = 8 * 1024 * 1024;
+
 const state = {
   lang: localStorage.getItem("lang") || "zh",
   user: null,
@@ -97,6 +100,17 @@ const i18n = {
     email: "邮箱",
     password: "密码",
     name: "昵称",
+    profile: "个人信息",
+    userId: "用户 ID",
+    username: "用户名",
+    currentPassword: "当前密码",
+    newPassword: "新密码",
+    confirmPassword: "确认新密码",
+    changeAvatar: "更换头像",
+    avatarHint: "支持 JPG、PNG、WebP",
+    profileSaveSuccess: "资料已更新",
+    passwordMismatch: "两次输入的新密码不一致",
+    passwordIncomplete: "如需修改密码，请填写当前密码和新密码",
     submitLogin: "登录",
     submitRegister: "注册",
     switchToRegister: "还没有账号？注册",
@@ -237,6 +251,17 @@ const i18n = {
     email: "Email",
     password: "Password",
     name: "Name",
+    profile: "Profile",
+    userId: "User ID",
+    username: "Username",
+    currentPassword: "Current password",
+    newPassword: "New password",
+    confirmPassword: "Confirm new password",
+    changeAvatar: "Change avatar",
+    avatarHint: "Supports JPG, PNG, and WebP",
+    profileSaveSuccess: "Profile updated",
+    passwordMismatch: "The new passwords do not match",
+    passwordIncomplete: "To change your password, fill in both the current and new password",
     submitLogin: "Login",
     submitRegister: "Register",
     switchToRegister: "Need an account? Register",
@@ -447,11 +472,20 @@ const elements = {
   startCreateBtn: $("#startCreateBtn"),
   promptLibraryBtn: $("#promptLibraryBtn"),
   langBtn: $("#langBtn"),
-  creditsBtn: $("#creditsBtn"),
-  creditsText: $("#creditsText"),
-  myWorksBtn: $("#myWorksBtn"),
   loginBtn: $("#loginBtn"),
-  logoutBtn: $("#logoutBtn"),
+  userMenuWrap: $("#userMenuWrap"),
+  userMenuButton: $("#userMenuButton"),
+  userMenuPanel: $("#userMenuPanel"),
+  userMenuAvatar: $("#userMenuAvatar"),
+  userMenuSummaryAvatar: $("#userMenuSummaryAvatar"),
+  userMenuName: $("#userMenuName"),
+  userMenuEmail: $("#userMenuEmail"),
+  userMenuId: $("#userMenuId"),
+  userMenuCredits: $("#userMenuCredits"),
+  profileBtn: $("#profileBtn"),
+  userCreditsBtn: $("#userCreditsBtn"),
+  userWorksBtn: $("#userWorksBtn"),
+  userLogoutBtn: $("#userLogoutBtn"),
   apiStatus: $("#apiStatus"),
   todayGeneratedText: $("#todayGeneratedText"),
   stickyComposerMount: $("#stickyComposerMount"),
@@ -558,13 +592,51 @@ function updateDailyMetric() {
   elements.todayGeneratedText.textContent = `${text("todayGeneratedPrefix")} ${formatDailyCount(state.stats.todayGenerated)} ${text("todayGeneratedSuffix")}`;
 }
 
+function getDisplayName(user = state.user) {
+  if (!user) return "";
+  const name = String(user.name || "").trim();
+  if (name) return name;
+  const email = String(user.email || "").trim();
+  return email ? email.split("@")[0] : (state.lang === "zh" ? "用户" : "User");
+}
+
+function getAvatarMarkup(user = state.user) {
+  const label = getDisplayName(user);
+  const avatarUrl = String(user?.avatarUrl || "").trim();
+  if (avatarUrl) {
+    return `<img src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(label)}">`;
+  }
+  const initial = Array.from(label)[0] || "U";
+  return `<span>${escapeHtml(initial.toUpperCase())}</span>`;
+}
+
+function closeUserMenu() {
+  elements.userMenuPanel?.classList.add("hidden");
+  elements.userMenuButton?.setAttribute("aria-expanded", "false");
+}
+
+function toggleUserMenu(forceOpen) {
+  if (!elements.userMenuPanel || !elements.userMenuButton || elements.userMenuWrap?.classList.contains("hidden")) return;
+  const shouldOpen = typeof forceOpen === "boolean" ? forceOpen : elements.userMenuPanel.classList.contains("hidden");
+  elements.userMenuPanel.classList.toggle("hidden", !shouldOpen);
+  elements.userMenuButton.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+}
+
 function updateNav() {
   const loggedIn = Boolean(state.user);
   elements.loginBtn.classList.toggle("hidden", loggedIn);
-  elements.logoutBtn.classList.toggle("hidden", !loggedIn);
-  elements.creditsBtn.classList.toggle("hidden", !loggedIn);
-  elements.myWorksBtn.classList.toggle("hidden", !loggedIn);
-  elements.creditsText.textContent = state.user ? `${text("credits")} ${state.user.credits}` : "0";
+  elements.userMenuWrap?.classList.toggle("hidden", !loggedIn);
+  if (loggedIn) {
+    const displayName = getDisplayName();
+    if (elements.userMenuAvatar) elements.userMenuAvatar.innerHTML = getAvatarMarkup();
+    if (elements.userMenuSummaryAvatar) elements.userMenuSummaryAvatar.innerHTML = getAvatarMarkup();
+    if (elements.userMenuName) elements.userMenuName.textContent = displayName;
+    if (elements.userMenuEmail) elements.userMenuEmail.textContent = state.user.email || "";
+    if (elements.userMenuId) elements.userMenuId.textContent = `${text("userId")}: ${state.user.id}`;
+    if (elements.userMenuCredits) elements.userMenuCredits.textContent = String(state.user.credits ?? 0);
+  } else {
+    closeUserMenu();
+  }
 
   const hasApiKey = Boolean(state.settings?.hasApiKey);
   elements.apiStatus.textContent = hasApiKey
@@ -603,6 +675,34 @@ function setComposerReference({ url = "", imageData = "", name = "", sourceGener
     sourceGenerationId: sourceGenerationId || null,
     conversationId: conversationId || null
   }];
+}
+
+function getLatestSuccessfulHistoryItem() {
+  for (let index = state.history.length - 1; index >= 0; index -= 1) {
+    const item = state.history[index];
+    if (item?.status === "done" && item.images?.[0]) return item;
+  }
+  return null;
+}
+
+function getConversationFallbackReference() {
+  const latestItem = getLatestSuccessfulHistoryItem();
+  if (!latestItem) return null;
+  return {
+    url: latestItem.images[0],
+    name: `generation-${latestItem.id}`,
+    sourceGenerationId: latestItem.id,
+    conversationId: latestItem.conversationId || state.activeConversationId || null
+  };
+}
+
+function seedComposerReferenceFromHistory() {
+  const latestReference = getConversationFallbackReference();
+  if (!latestReference) {
+    clearComposerReferences();
+    return;
+  }
+  setComposerReference(latestReference);
 }
 
 function openWorkspace(options = {}) {
@@ -654,9 +754,9 @@ function createComposer(sticky) {
     syncComposers(form);
   });
   textarea.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-      form.requestSubmit();
-    }
+    if (event.key !== "Enter" || event.isComposing || event.shiftKey) return;
+    event.preventDefault();
+    form.requestSubmit();
   });
   // Paste an image directly into the prompt box to attach it as the next
   // reference. Mirrors the paste-to-upload behaviour in
@@ -688,8 +788,24 @@ function createComposer(sticky) {
     }
   });
   referenceInput.addEventListener("change", async () => {
-    const file = referenceInput.files?.[0];
+    const files = [...(referenceInput.files || [])];
+    const file = files[0];
     if (!file) return;
+    if (files.length > 1) {
+      referenceInput.value = "";
+      showToast(state.lang === "zh" ? "图生图一次只能上传 1 张图片" : "Image editing supports only 1 upload at a time.", "ri-error-warning-line");
+      return;
+    }
+    if (!String(file.type || "").startsWith("image/")) {
+      referenceInput.value = "";
+      showToast(state.lang === "zh" ? "请上传图片文件" : "Please upload an image file.", "ri-error-warning-line");
+      return;
+    }
+    if (file.size > MAX_EDIT_UPLOAD_BYTES) {
+      referenceInput.value = "";
+      showToast(state.lang === "zh" ? "单张图片不能超过 8 MiB" : "Each image must be 8 MiB or smaller.", "ri-error-warning-line");
+      return;
+    }
     const dataUrl = await blobToDataUrl(file);
     setComposerReference({ url: dataUrl, imageData: dataUrl, name: file.name, sourceGenerationId: null });
     referenceInput.value = "";
@@ -732,16 +848,24 @@ function createComposer(sticky) {
   return fragment;
 }
 
+function getAllowedImageSizes() {
+  const allowedSizes = state.settings?.allowedImageSizes;
+  return Array.isArray(allowedSizes) && allowedSizes.length ? allowedSizes : DEFAULT_ALLOWED_IMAGE_SIZES;
+}
+
+function normalizeSelectedImageSize(value) {
+  const allowedSizes = getAllowedImageSizes();
+  const normalizedValue = String(value || "auto");
+  return allowedSizes.includes(normalizedValue) ? normalizedValue : (allowedSizes[0] || "auto");
+}
+
 function getComposerOptions(form) {
-  const sizeValue = $(".size-input", form).value;
-  const customWidth = $(".custom-width-input", form)?.value || "2048";
-  const customHeight = $(".custom-height-input", form)?.value || "2048";
-  const imageCount = $(".image-count-input", form)?.value || state.imageCount || "1";
+  const sizeValue = normalizeSelectedImageSize($(".size-input", form).value);
   return {
-    size: sizeValue === "custom" ? `${customWidth}x${customHeight}` : sizeValue,
+    size: sizeValue,
     sizeMode: sizeValue,
-    customWidth,
-    customHeight,
+    customWidth: "",
+    customHeight: "",
     quality: $(".quality-input", form).value,
     background: $(".background-input", form).value,
     outputFormat: $(".format-input", form).value,
@@ -765,28 +889,22 @@ function syncComposers(sourceForm) {
   $$(".composer").forEach((form) => {
     if (form !== sourceForm) {
       $(".prompt-box", form).value = state.draftPrompt;
-      const sizeInput = $(".size-input", form);
-      if (sizeInput) {
-        const mode = state.generationOptions.sizeMode || state.generationOptions.size;
-        sizeInput.value = [...sizeInput.options].some((option) => option.value === mode) ? mode : "custom";
-      }
-      const cwi = $(".custom-width-input", form);
-      const chi = $(".custom-height-input", form);
-      if (cwi) cwi.value = state.generationOptions.customWidth || "2048";
-      if (chi) chi.value = state.generationOptions.customHeight || "2048";
-      const qi = $(".quality-input", form);
-      const bi = $(".background-input", form);
-      const fi = $(".format-input", form);
-      const pi = $(".public-input", form);
-      if (qi) qi.value = state.generationOptions.quality;
-      if (bi) bi.value = state.generationOptions.background;
-      if (fi) fi.value = state.generationOptions.outputFormat;
-      if (pi) pi.checked = state.publishToSquare;
+      const mode = state.generationOptions.sizeMode || state.generationOptions.size;
+      $(".size-input", form).value = normalizeSelectedImageSize(mode);
+      $(".quality-input", form).value = state.generationOptions.quality;
+      $(".background-input", form).value = state.generationOptions.background;
+      $(".format-input", form).value = state.generationOptions.outputFormat;
+      $(".public-input", form).checked = state.publishToSquare;
     }
     updateCustomSizeVisibility(form);
-    const modelLabel = $(".model-label", form);
-    if (modelLabel) modelLabel.textContent = "gpt-image-2";
-
+    $(".model-label", form).textContent = "gpt-image-2";
+    const activeReference = state.references[0] || getConversationFallbackReference();
+    const isImageEdit = Boolean(activeReference?.url);
+    const actionText = isImageEdit
+      ? (state.lang === "zh" ? "修改" : "Edit")
+      : text("create");
+    const submitLabel = $(".send-button span", form);
+    if (submitLabel) submitLabel.textContent = actionText;
     const qualityInput = $(".quality-input", form);
     const backgroundInput = $(".background-input", form);
     const formatInput = $(".format-input", form);
@@ -847,10 +965,11 @@ function syncReferences(sourceForm) {
   });
 }
 
-async function submitGeneration(form) {
+async function submitGeneration(form, options = {}) {
+  const { forceGenerate = false } = options;
   const prompt = $(".prompt-box", form).value.trim();
   if (!prompt) return;
-  const attachedReference = state.references[0] || null;
+  const attachedReference = forceGenerate ? null : (state.references[0] || getConversationFallbackReference());
   const isImageEdit = Boolean(attachedReference?.url);
   if (!state.user) {
     state.draftPrompt = prompt;
@@ -895,8 +1014,7 @@ async function submitGeneration(form) {
     prompt,
     isPublic: state.publishToSquare,
     options: { ...state.generationOptions },
-    references: referenceUrls,
-    time: new Date().toISOString()
+    references: attachedReference?.url ? [attachedReference.url] : []
   };
   const placeholderItems = [];
   for (let i = 0; i < effectiveCount; i += 1) {
@@ -987,25 +1105,17 @@ async function submitGeneration(form) {
     state.stats.todayGenerated += newGenerations.length;
     updateDailyMetric();
     await loadConversations();
-    if (state.activeConversationId) await switchToConversation(state.activeConversationId);
-    if (baseItem.isPublic) await loadPublicGallery();
+    if (item.isPublic) await loadPublicGallery();
+    setComposerReference({
+      url: generation.images[0],
+      name: `generation-${generation.id}`,
+      sourceGenerationId: generation.id,
+      conversationId: generation.conversationId || state.activeConversationId || null
+    });
     if (isImageEdit) {
-      const generation = newGenerations[0];
-      setComposerReference({
-        url: generation.images[0],
-        name: `generation-${generation.id}`,
-        sourceGenerationId: generation.id,
-        conversationId: generation.conversationId || state.activeConversationId || null
-      });
       showToast(state.lang === "zh" ? "已更新图片，可继续修改" : "Image updated. You can keep iterating.", "ri-magic-line");
     } else {
-      clearComposerReferences();
-      showToast(
-        state.lang === "zh"
-          ? `已生成 ${newGenerations.length} 张`
-          : `Created ${newGenerations.length} image${newGenerations.length === 1 ? "" : "s"}`,
-        "ri-sparkling-2-fill"
-      );
+      showToast(state.lang === "zh" ? "已生成，可继续修改" : "Created. You can keep iterating.", "ri-sparkling-2-fill");
     }
   } catch (error) {
     const errorMessage = error.message || String(error);
@@ -1014,9 +1124,9 @@ async function submitGeneration(form) {
         ? { ...entry, status: "error", error: errorMessage }
         : entry
     );
-    state.pendingTurns.delete(tempTurnId);
-    if (/credit|额度|积分|Not enough/i.test(errorMessage)) openCreditsModal();
-    else showToast(errorMessage, "ri-error-warning-line");
+    if (!state.references.length) seedComposerReferenceFromHistory();
+    if (/credit|额度|积分|Not enough/i.test(error.message)) openCreditsModal();
+    else showToast(error.message, "ri-error-warning-line");
   } finally {
     state.generating = false;
     stopFunMessages();
@@ -1201,264 +1311,29 @@ function renderHistory() {
   }
 }
 
-function renderTurnCard(turn) {
-  const fragment = elements.turnTemplate.content.cloneNode(true);
-  const card = $(".turn-card", fragment);
-  card.dataset.turnId = turn.id;
-  card.dataset.status = turn.status;
-
-  // User message bubble: prompt text.
-  $(".turn-prompt-text", card).textContent = turn.prompt || "";
-
-  // Meta chips (size / model / time).
-  const sizeChip = $(".turn-size", card);
-  if (sizeChip) sizeChip.textContent = turn.options?.size || "auto";
-  const modelChip = $(".turn-model", card);
-  if (modelChip) modelChip.textContent = "gpt-image-2";
-  const timeChip = $(".turn-time", card);
-  if (timeChip) timeChip.textContent = formatDateTime(turn.time) || "";
-
-  // Reference thumbnails (image-to-image input previews).
-  const refRow = $(".turn-references", card);
-  if (refRow) {
-    if (turn.references?.length) {
-      refRow.classList.remove("hidden");
-      refRow.innerHTML = turn.references
-        .map((url) => `<img class="turn-reference-thumb" src="${url}" alt="reference">`)
-        .join("");
-    } else {
-      refRow.classList.add("hidden");
-    }
-  }
-
-  // Turn-level status / error band.
-  const statusRow = $(".turn-status", card);
-  const errorRow = $(".turn-error", card);
-  if (statusRow) {
-    if (turn.status === "queued" || turn.status === "generating") {
-      statusRow.classList.remove("hidden");
-      statusRow.textContent = turn.status === "queued" ? text("turnQueued") : text("turnGenerating");
-    } else {
-      statusRow.classList.add("hidden");
-    }
-  }
-  if (errorRow) {
-    if (turn.status === "error" && turn.error) {
-      errorRow.classList.remove("hidden");
-      errorRow.textContent = turn.error;
-    } else if (turn.status === "partial") {
-      const failedCount = turn.items.filter((entry) => entry.status === "error").length;
-      errorRow.classList.remove("hidden");
-      errorRow.textContent = text("turnPartialError").replace("{n}", String(failedCount));
-    } else {
-      errorRow.classList.add("hidden");
-    }
-  }
-
-  // Image grid (one cell per image in the turn).
-  const grid = $(".turn-grid", card);
-  const n = turn.items.length;
-  if (grid) {
-    grid.dataset.count = String(n);
-    grid.classList.toggle("grid-1", n <= 1);
-    grid.classList.toggle("grid-2", n === 2);
-    grid.classList.toggle("grid-3", n === 3);
-    grid.classList.toggle("grid-4", n >= 4);
-    for (let i = 0; i < n; i += 1) {
-      grid.appendChild(renderTurnImage(turn.items[i], turn, i));
-    }
-  }
-
-  // Header action buttons (reuse / regenerate / delete).
-  const reuseBtn = $(".turn-reuse", card);
-  if (reuseBtn) {
-    reuseBtn.addEventListener("click", () => reuseTurnConfig(turn));
-  }
-  const regenBtn = $(".turn-regenerate", card);
-  if (regenBtn) {
-    regenBtn.addEventListener("click", () => regenerateTurn(turn));
-    if (turn.status === "generating") regenBtn.disabled = true;
-  }
-  const deleteBtn = $(".turn-delete", card);
-  if (deleteBtn) {
-    deleteBtn.addEventListener("click", () => deleteTurn(turn));
-    if (turn.status === "generating") deleteBtn.disabled = true;
-  }
-
-  applyI18n(card);
-  return card;
-}
-
-function renderTurnImage(entry, turn, index) {
-  const fragment = elements.turnImageTemplate.content.cloneNode(true);
-  const cell = $(".turn-image", fragment);
-  cell.dataset.imageId = entry.id;
-  cell.dataset.status = entry.status;
-
-  const img = $(".turn-image-pic", cell);
-  const skeleton = $(".turn-image-skeleton", cell);
-  const errorBox = $(".turn-image-error", cell);
-  const errorText = $(".turn-image-error-text", cell);
-  if (entry.status === "done" && entry.images?.[0]) {
-    img.src = entry.images[0];
-    img.alt = truncate(entry.prompt || "image", 80);
-    img.classList.remove("hidden");
-    skeleton?.classList.add("hidden");
-    errorBox?.classList.add("hidden");
-  } else if (entry.status === "error") {
-    img.classList.add("hidden");
-    skeleton?.classList.add("hidden");
-    errorBox?.classList.remove("hidden");
-    if (errorText) errorText.textContent = entry.error || text("turnImageError");
-  } else {
-    img.classList.add("hidden");
-    skeleton?.classList.remove("hidden");
-    errorBox?.classList.add("hidden");
-  }
-
-  // Per-image action overlay (download / continue-edit / publish / lightbox).
-  const actionsRow = $(".turn-image-actions", cell);
-  const hasImage = entry.status === "done" && Boolean(entry.images?.[0]);
-  if (actionsRow) {
-    actionsRow.classList.toggle("hidden", !hasImage && entry.status !== "error");
-  }
-
-  const findAction = (name) => $(`[data-action="${name}"]`, cell);
-
-  const downloadBtn = findAction("download");
-  if (downloadBtn) {
-    downloadBtn.classList.toggle("hidden", !hasImage);
-    if (hasImage) {
-      downloadBtn.addEventListener("click", () => {
-        const a = document.createElement("a");
-        a.href = entry.images[0];
-        a.download = `${entry.id}.png`;
-        a.target = "_blank";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      });
-    }
-  }
-  const continueBtn = findAction("continue-edit");
-  if (continueBtn) {
-    continueBtn.classList.toggle("hidden", !hasImage);
-    if (hasImage) continueBtn.addEventListener("click", () => continueEditFromTurnImage(entry));
-  }
-  const publishBtn = findAction("publish");
-  if (publishBtn) {
-    if (!hasImage) {
-      publishBtn.classList.add("hidden");
-    } else if (entry.isPublic) {
-      publishBtn.disabled = true;
-      publishBtn.classList.add("active");
-    } else {
-      publishBtn.addEventListener("click", () => publishTurnImage(entry));
-    }
-  }
-  const lightboxBtn = findAction("lightbox");
-  if (lightboxBtn) {
-    lightboxBtn.classList.toggle("hidden", !hasImage);
-    if (hasImage) lightboxBtn.addEventListener("click", () => openLightbox(entry.images[0], entry.prompt || ""));
-  }
-  const retryBtn = findAction("retry");
-  if (retryBtn) {
-    if (entry.status === "error") {
-      retryBtn.classList.remove("hidden");
-      retryBtn.addEventListener("click", () => retryTurnImage(entry, turn, index));
-    } else {
-      retryBtn.classList.add("hidden");
-    }
-  }
-
-  return cell;
-}
-
-// === Per-turn / per-image actions =====================================
-function reuseTurnConfig(turn) {
-  state.draftPrompt = turn.prompt || "";
-  state.generationOptions = { ...state.generationOptions, ...(turn.options || {}) };
-  state.publishToSquare = Boolean(turn.isPublic);
-  state.imageCount = String(Math.max(1, turn.items?.length || 1));
-  clearComposerReferences();
-  syncComposers();
-  syncReferences();
-  setView("workspace");
-  setTimeout(() => $(".prompt-box", elements.stickyComposerMount)?.focus(), 60);
-  showToast(state.lang === "zh" ? "已复用上次配置" : "Configuration reused", "ri-magic-line");
-}
-
-async function regenerateTurn(turn) {
-  if (state.generating) return;
-  if (!confirm(text("confirmRegenerateTurn"))) return;
-  reuseTurnConfig(turn);
-  const form = $(".composer", elements.stickyComposerMount);
-  if (!form) return;
-  $(".prompt-box", form).value = turn.prompt || "";
-  state.draftPrompt = turn.prompt || "";
-  submitGeneration(form);
-}
-
-async function deleteTurn(turn) {
-  if (!confirm(text("confirmDeleteTurn"))) return;
-  const ids = turn.items.map((entry) => entry.id).filter((id) => id && !String(id).startsWith("tmp_"));
-  for (const id of ids) {
-    try {
-      await api(`/api/images/${id}`, { method: "DELETE" });
-    } catch (error) {
-      showToast(error.message, "ri-error-warning-line");
-    }
-  }
-  const idSet = new Set(turn.items.map((entry) => entry.id));
-  state.history = state.history.filter((entry) => !idSet.has(entry.id));
-  state.allGenerations = state.allGenerations.filter((entry) => !idSet.has(entry.id));
-  renderAll();
-}
-
-function continueEditFromTurnImage(entry) {
-  if (!entry.images?.[0]) return;
-  openImageEditor(entry.images[0], entry.id, entry.conversationId || null);
-}
-
-async function publishTurnImage(entry) {
-  if (!entry?.id || entry.isPublic) return;
-  try {
-    await api(`/api/images/${entry.id}/publish`, { method: "POST" });
-    state.history = state.history.map((item) =>
-      item.id === entry.id ? { ...item, isPublic: true } : item
-    );
-    state.allGenerations = state.allGenerations.map((item) =>
-      item.id === entry.id ? { ...item, isPublic: true } : item
-    );
-    showToast(text("publicSuccess"), "ri-global-line");
-    await loadPublicGallery();
-    renderAll();
-  } catch (error) {
-    showToast(error.message, "ri-error-warning-line");
-  }
-}
-
-async function retryTurnImage(entry, turn, index) {
-  if (state.generating) return;
-  if (entry.status === "generating") return;
-  state.history = state.history.map((item) =>
-    item.id === entry.id ? { ...item, status: "generating", error: null } : item
-  );
-  renderAll();
-  try {
-    const data = await api("/api/images/generate", {
-      method: "POST",
-      body: JSON.stringify({
-        prompt: turn.prompt,
-        size: turn.options?.size || state.generationOptions.size,
-        quality: turn.options?.quality || state.generationOptions.quality,
-        background: turn.options?.background || state.generationOptions.background,
-        outputFormat: turn.options?.outputFormat || state.generationOptions.outputFormat,
-        isPublic: turn.isPublic,
-        conversationId: turn.conversationId || state.activeConversationId,
-        sourceGenerationId: null,
-        n: 1
-      })
+  $$("[data-retry]", elements.historyList).forEach((button) => {
+    button.addEventListener("click", () => {
+      state.draftPrompt = button.dataset.retry;
+      clearComposerReferences();
+      syncComposers();
+      syncReferences();
+      const form = $(".composer", elements.stickyComposerMount);
+      submitGeneration(form, { forceGenerate: true });
+    });
+  });
+  $$("[data-edit]", elements.historyList).forEach((button) => {
+    button.addEventListener("click", () => {
+      state.draftPrompt = button.dataset.edit;
+      clearComposerReferences();
+      syncComposers();
+      syncReferences();
+      $(".prompt-box", $(".composer", elements.stickyComposerMount) || document)?.focus();
+    });
+  });
+  $$("[data-edit-image]", elements.historyList).forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = state.history.find((entry) => String(entry.id) === button.dataset.editImage);
+      if (item?.images?.[0]) openImageEditor(item.images[0], item.id, item.conversationId || null);
     });
     const generations = (data.generations || []).map(historyItemFromGeneration);
     if (!generations.length) throw new Error("No image was returned");
@@ -2054,6 +1929,7 @@ async function submitAuth(event) {
 }
 
 async function logout() {
+  closeUserMenu();
   await api("/api/auth/logout", { method: "POST" }).catch(() => null);
   state.user = null;
   state.history = [];
@@ -2125,7 +2001,7 @@ function openCreditsModal() {
   `);
   $("[data-checkin]", elements.modalLayer).addEventListener("click", submitCheckin);
   $("[data-redeem-form]", elements.modalLayer).addEventListener("submit", submitRedeem);
-  $("[data-history]", elements.modalLayer).addEventListener("click", openCreditHistoryModal);
+  $("[data-history]", elements.modalLayer).addEventListener("click", () => openCreditHistoryModal({ returnToCredits: true }));
   $("[data-close-auth]", elements.modalLayer).addEventListener("click", closeModal);
 }
 
@@ -2158,7 +2034,8 @@ async function submitRedeem(event) {
   }
 }
 
-async function openCreditHistoryModal() {
+async function openCreditHistoryModal(options = {}) {
+  const { returnToCredits = false } = options;
   if (!state.user) {
     openAuthModal("login");
     return;
@@ -2206,7 +2083,124 @@ async function openCreditHistoryModal() {
       <button class="modal-secondary" type="button" data-close-auth>${text("close")}</button>
     </section>
   `);
-  $("[data-close-auth]", elements.modalLayer).addEventListener("click", openCreditsModal);
+  $("[data-close-auth]", elements.modalLayer).addEventListener("click", returnToCredits ? openCreditsModal : closeModal);
+}
+
+function openProfileModal() {
+  if (!state.user) {
+    openAuthModal("login");
+    return;
+  }
+  openModal(`
+    <section class="modal">
+      <button class="close-modal" type="button"><i class="ri-close-line"></i></button>
+      <div class="modal-title">
+        <i class="ri-user-settings-line"></i>
+        <h2>${text("profile")}</h2>
+      </div>
+      <form id="profileForm" class="modal-form profile-modal-grid">
+        <div class="profile-avatar-row">
+          <div id="profileAvatarPreview" class="avatar-face avatar-face-lg" aria-hidden="true"></div>
+          <div class="profile-avatar-text">
+            <strong id="profileDisplayName">${escapeHtml(getDisplayName())}</strong>
+            <label class="profile-avatar-upload">
+              <i class="ri-image-edit-line"></i>
+              <span>${text("changeAvatar")}</span>
+              <input id="profileAvatarInput" type="file" accept="image/*">
+            </label>
+            <p class="profile-hint">${text("avatarHint")}</p>
+          </div>
+        </div>
+        <div class="profile-static-grid">
+          <label>${text("email")}<input type="text" value="${escapeHtml(state.user.email || "")}" readonly></label>
+          <label>${text("userId")}<input type="text" value="${escapeHtml(state.user.id || "")}" readonly></label>
+        </div>
+        <div class="profile-edit-grid">
+          <p class="profile-section-title">${text("profile")}</p>
+          <label>${text("username")}<input id="profileNameInput" type="text" maxlength="60" value="${escapeHtml(state.user.name || "")}" required></label>
+        </div>
+        <div class="profile-password-grid">
+          <p class="profile-section-title">${text("password")}</p>
+          <label>${text("currentPassword")}<input id="profileCurrentPasswordInput" type="password" autocomplete="current-password"></label>
+          <label>${text("newPassword")}<input id="profileNewPasswordInput" type="password" autocomplete="new-password"></label>
+          <label>${text("confirmPassword")}<input id="profileConfirmPasswordInput" type="password" autocomplete="new-password"></label>
+        </div>
+        <button class="modal-primary" type="submit">${text("save")}</button>
+      </form>
+    </section>
+  `);
+  const preview = $("#profileAvatarPreview", elements.modalLayer);
+  const avatarInput = $("#profileAvatarInput", elements.modalLayer);
+  const nameInput = $("#profileNameInput", elements.modalLayer);
+  const displayName = $("#profileDisplayName", elements.modalLayer);
+  const syncPreview = () => {
+    const nextName = nameInput?.value || state.user?.name || "";
+    if (displayName) displayName.textContent = nextName || getDisplayName();
+    if (!preview) return;
+    preview.innerHTML = getAvatarMarkup({
+      ...state.user,
+      name: nextName,
+      avatarUrl: avatarInput?.dataset.imageData || state.user?.avatarUrl || ""
+    });
+  };
+  syncPreview();
+  nameInput?.addEventListener("input", syncPreview);
+  avatarInput?.addEventListener("change", async () => {
+    const file = avatarInput.files?.[0];
+    if (!file) {
+      delete avatarInput.dataset.imageData;
+      syncPreview();
+      return;
+    }
+    avatarInput.dataset.imageData = await blobToDataUrl(file);
+    syncPreview();
+  });
+  $("#profileForm", elements.modalLayer)?.addEventListener("submit", submitProfileUpdate);
+}
+
+async function submitProfileUpdate(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = form.querySelector("button[type='submit']");
+  const name = String($("#profileNameInput", form)?.value || "").trim();
+  const currentPassword = String($("#profileCurrentPasswordInput", form)?.value || "");
+  const newPassword = String($("#profileNewPasswordInput", form)?.value || "");
+  const confirmPassword = String($("#profileConfirmPasswordInput", form)?.value || "");
+  const avatarData = String($("#profileAvatarInput", form)?.dataset.imageData || "");
+  if (!name) {
+    showToast(state.lang === "zh" ? "请输入用户名" : "Please enter a username", "ri-error-warning-line");
+    return;
+  }
+  const wantsPasswordChange = Boolean(currentPassword || newPassword || confirmPassword);
+  if (wantsPasswordChange && (!currentPassword || !newPassword)) {
+    showToast(text("passwordIncomplete"), "ri-error-warning-line");
+    return;
+  }
+  if (newPassword && newPassword !== confirmPassword) {
+    showToast(text("passwordMismatch"), "ri-error-warning-line");
+    return;
+  }
+  if (submit) submit.disabled = true;
+  try {
+    const payload = { name };
+    if (avatarData) payload.avatarData = avatarData;
+    if (wantsPasswordChange) {
+      payload.currentPassword = currentPassword;
+      payload.newPassword = newPassword;
+    }
+    const data = await api("/api/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+    state.user = data.user;
+    closeModal();
+    renderAll();
+    showToast(text("profileSaveSuccess"), "ri-checkbox-circle-line");
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  } finally {
+    if (submit) submit.disabled = false;
+  }
 }
 
 function formatTransactionType(type) {
@@ -2457,9 +2451,34 @@ function bindGlobalEvents() {
     renderAll();
   });
   elements.loginBtn.addEventListener("click", () => openAuthModal("login"));
-  elements.logoutBtn.addEventListener("click", logout);
-  elements.creditsBtn.addEventListener("click", openCreditsModal);
-  elements.myWorksBtn.addEventListener("click", openMyWorksModal);
+  elements.userMenuButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleUserMenu();
+  });
+  elements.profileBtn?.addEventListener("click", () => {
+    closeUserMenu();
+    openProfileModal();
+  });
+  elements.userCreditsBtn?.addEventListener("click", () => {
+    closeUserMenu();
+    openCreditHistoryModal({ returnToCredits: false });
+  });
+  elements.userWorksBtn?.addEventListener("click", () => {
+    closeUserMenu();
+    openMyWorksModal();
+  });
+  elements.userLogoutBtn?.addEventListener("click", () => {
+    closeUserMenu();
+    logout();
+  });
+  document.addEventListener("click", (event) => {
+    if (!elements.userMenuWrap || elements.userMenuWrap.classList.contains("hidden")) return;
+    if (elements.userMenuWrap.contains(event.target)) return;
+    closeUserMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeUserMenu();
+  });
   elements.librarySearchForm.addEventListener("submit", (event) => {
     event.preventDefault();
     state.librarySearch = elements.librarySearchInput.value;
@@ -2609,7 +2628,7 @@ async function switchToConversation(convId) {
     state.activeConversationId = convId;
     state.history = (data.messages || []).map(historyItemFromGeneration);
     state.draftPrompt = "";
-    clearComposerReferences();
+    seedComposerReferenceFromHistory();
     renderAll();
     setView("workspace");
     scrollToBottom();
