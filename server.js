@@ -246,10 +246,9 @@ function maskApiKey(key) {
 
 function publicSettings(settings) {
   const active = getUpstreamConfig(settings);
-  const imageGeneration = getNativeChatgpt2apiConfig(settings);
   return {
-    hasApiKey: Boolean(imageGeneration.apiKey && imageGeneration.baseUrl),
-    model: getUpstreamConfig(settings, "chatgpt2api").model || settings.model || DEFAULT_MODEL,
+    hasApiKey: Boolean(active.apiKey && active.baseUrl),
+    model: active.model || settings.model || DEFAULT_MODEL,
     activeUpstream: active.id,
     allowRegistration: Boolean(settings.allowRegistration),
     requireApproval: Boolean(settings.requireApproval),
@@ -918,10 +917,9 @@ async function routeApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/stats/today") {
-    const offset = Math.max(0, Number.parseInt(process.env.TODAY_GENERATED_OFFSET || "0", 10) || 0);
     const generatedToday = await store.countTodayGenerations();
     return sendJson(res, 200, {
-      todayGenerated: offset + generatedToday
+      todayGenerated: generatedToday
     });
   }
 

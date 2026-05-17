@@ -38,7 +38,7 @@ const state = {
   promptLoading: true,
   pendingAction: null,
   stats: {
-    todayGenerated: 4200
+    todayGenerated: null
   }
 };
 
@@ -583,8 +583,9 @@ function applyI18n(root = document) {
 }
 
 function formatDailyCount(value) {
+  if (value === null || value === undefined || value === "") return "--";
   const count = Math.max(0, Number(value) || 0);
-  return `${count.toLocaleString(state.lang === "zh" ? "zh-CN" : "en-US")}${count >= 1000 ? "+" : ""}`;
+  return count.toLocaleString(state.lang === "zh" ? "zh-CN" : "en-US");
 }
 
 function updateDailyMetric() {
@@ -638,13 +639,13 @@ function updateNav() {
     closeUserMenu();
   }
 
-  const hasApiKey = Boolean(state.settings?.hasApiKey);
-  elements.apiStatus.textContent = hasApiKey
-    ? "gpt-image-2"
-    : state.lang === "zh"
-      ? "后台未配置 API Key"
-      : "API key not configured";
-  elements.apiStatus.style.color = hasApiKey ? "#64748b" : "#b42318";
+  const hasApiKey = state.settings?.hasApiKey;
+  elements.apiStatus.textContent = hasApiKey === true
+    ? (state.settings?.model || "gpt-image-2")
+    : hasApiKey === false
+      ? (state.lang === "zh" ? "后台未配置 API Key" : "API key not configured")
+      : "Checking...";
+  elements.apiStatus.style.color = hasApiKey === false ? "#b42318" : "#64748b";
 }
 
 function setView(view) {
@@ -1735,10 +1736,32 @@ function restartHeroVideo() {
 async function loadStats() {
   try {
     const data = await api("/api/stats/today");
-    state.stats.todayGenerated = Number(data.todayGenerated ?? data.count ?? state.stats.todayGenerated);
-    updateDailyMetric();
+    state.stats.todayGenerated = Number(data.todayGenerated ?? data.count ?? 0);
   } catch {
-    updateDailyMetric();
+    state.stats.todayGenerated = null;
+  }
+  updateDailyMetric();
+}
+
+async function loadPublicSettings() {
+  try {
+    const settings = await api("/api/settings");
+    state.settings = settings;
+  } catch {
+    if (!state.settings) {
+      state.settings = {
+        hasApiKey: null,
+        model: "gpt-image-2",
+        activeUpstream: "chatgpt2api",
+        allowRegistration: true,
+        requireApproval: false,
+        defaultCredits: 0,
+        generationCreditCost: 1,
+        checkinCredit: 1,
+        maxImagesPerRequest: 1,
+        allowedImageSizes: DEFAULT_ALLOWED_IMAGE_SIZES
+      };
+    }
   }
 }
 
@@ -1981,8 +2004,11 @@ async function submitAuth(event) {
       closeModal();
       return;
     }
-    state.user = data.user;
     const me = await api("/api/auth/me");
+    if (!me.user) {
+      throw new Error(state.lang === "zh" ? "登录状态未建立，请重试" : "Login session was not established. Please try again.");
+    }
+    state.user = me.user;
     state.settings = me.settings;
     state.firstRun = me.firstRun;
     state.checkin = me.checkin || state.checkin;
@@ -2510,17 +2536,26 @@ async function saveUser(row) {
 
 async function bootstrap() {
   renderComposers();
+  await loadPublicSettings();
+  await loadStats();
+  await loadPublicGallery();
   try {
     const data = await api("/api/auth/me");
     state.user = data.user;
-    state.settings = data.settings;
+    state.settings = data.settings || state.settings;
     state.firstRun = data.firstRun;
     state.checkin = data.checkin || state.checkin;
-    await loadHistory();
-    await loadStats();
-    await loadPublicGallery();
-    await loadConversations();
+    if (data.user) {
+      await loadHistory();
+      await loadConversations();
+    } else {
+      state.history = [];
+      state.allGenerations = [];
+    }
   } catch (error) {
+    state.user = null;
+    state.history = [];
+    state.allGenerations = [];
     showToast(error.message, "ri-error-warning-line");
   }
   renderAll();

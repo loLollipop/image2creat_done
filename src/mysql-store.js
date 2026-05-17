@@ -1084,7 +1084,7 @@ async function deleteGeneration(id) {
 
 async function countTodayGenerations() {
   const [rows] = await getPool().execute(
-    "SELECT COUNT(*) AS count FROM generations WHERE created_at >= CURDATE() AND created_at < DATE_ADD(CURDATE(), INTERVAL 1 DAY)"
+    "SELECT COUNT(*) AS count FROM generations WHERE operation_type = 'generate' AND created_at >= CURDATE() AND created_at < DATE_ADD(CURDATE(), INTERVAL 1 DAY)"
   );
   return Number(rows[0]?.count || 0);
 }
