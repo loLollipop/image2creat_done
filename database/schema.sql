@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(128) NOT NULL,
   role VARCHAR(16) NOT NULL,
   status VARCHAR(16) NOT NULL,
+  avatar_filename VARCHAR(255) NULL,
   credits INT UNSIGNED NOT NULL DEFAULT 0,
   created_at DATETIME(3) NOT NULL,
   updated_at DATETIME(3) NOT NULL,

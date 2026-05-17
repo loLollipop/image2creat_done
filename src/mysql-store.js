@@ -108,6 +108,7 @@ function mapUser(row) {
     },
     role: row.role,
     status: row.status,
+    avatarFilename: row.avatar_filename || "",
     credits: Number(row.credits || 0),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at)
@@ -253,6 +254,7 @@ async function runMigrations() {
       password_hash VARCHAR(128) NOT NULL,
       role VARCHAR(16) NOT NULL,
       status VARCHAR(16) NOT NULL,
+      avatar_filename VARCHAR(255) NULL,
       credits INT UNSIGNED NOT NULL DEFAULT 0,
       created_at DATETIME(3) NOT NULL,
       updated_at DATETIME(3) NOT NULL,
@@ -260,6 +262,11 @@ async function runMigrations() {
       INDEX idx_users_created_at (created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  const [userAvatarColumns] = await db.execute("SHOW COLUMNS FROM users LIKE 'avatar_filename'");
+  if (!userAvatarColumns.length) {
+    await db.query("ALTER TABLE users ADD COLUMN avatar_filename VARCHAR(255) NULL AFTER status");
+  }
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -634,6 +641,33 @@ async function updateUser(id, patch) {
     }
   }
 
+  if (columns.length) {
+    columns.push("updated_at = ?");
+    values.push(new Date(), id);
+    await getPool().execute(`UPDATE users SET ${columns.join(", ")} WHERE id = ?`, values);
+  }
+  return getUserById(id);
+}
+
+async function updateUserProfile(id, patch) {
+  const columns = [];
+  const values = [];
+  if (Object.hasOwn(patch, "name")) {
+    columns.push("name = ?");
+    values.push(patch.name);
+  }
+  if (Object.hasOwn(patch, "avatarFilename")) {
+    columns.push("avatar_filename = ?");
+    values.push(patch.avatarFilename || null);
+  }
+  if (patch.passwordHash) {
+    columns.push("password_salt = ?");
+    values.push(patch.passwordHash.salt);
+    columns.push("password_iterations = ?");
+    values.push(patch.passwordHash.iterations);
+    columns.push("password_hash = ?");
+    values.push(patch.passwordHash.hash);
+  }
   if (columns.length) {
     columns.push("updated_at = ?");
     values.push(new Date(), id);
@@ -1479,6 +1513,7 @@ module.exports = {
   createUser,
   listUsers,
   updateUser,
+  updateUserProfile,
   reserveCredits,
   addCredits,
   adjustCredits,

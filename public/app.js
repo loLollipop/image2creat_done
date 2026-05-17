@@ -1,3 +1,6 @@
+const DEFAULT_ALLOWED_IMAGE_SIZES = ["auto", "1024x1024", "1024x1536", "1536x1024"];
+const MAX_EDIT_UPLOAD_BYTES = 8 * 1024 * 1024;
+
 const state = {
   lang: localStorage.getItem("lang") || "zh",
   user: null,
@@ -93,6 +96,17 @@ const i18n = {
     email: "邮箱",
     password: "密码",
     name: "昵称",
+    profile: "个人信息",
+    userId: "用户 ID",
+    username: "用户名",
+    currentPassword: "当前密码",
+    newPassword: "新密码",
+    confirmPassword: "确认新密码",
+    changeAvatar: "更换头像",
+    avatarHint: "支持 JPG、PNG、WebP",
+    profileSaveSuccess: "资料已更新",
+    passwordMismatch: "两次输入的新密码不一致",
+    passwordIncomplete: "如需修改密码，请填写当前密码和新密码",
     submitLogin: "登录",
     submitRegister: "注册",
     switchToRegister: "还没有账号？注册",
@@ -213,6 +227,17 @@ const i18n = {
     email: "Email",
     password: "Password",
     name: "Name",
+    profile: "Profile",
+    userId: "User ID",
+    username: "Username",
+    currentPassword: "Current password",
+    newPassword: "New password",
+    confirmPassword: "Confirm new password",
+    changeAvatar: "Change avatar",
+    avatarHint: "Supports JPG, PNG, and WebP",
+    profileSaveSuccess: "Profile updated",
+    passwordMismatch: "The new passwords do not match",
+    passwordIncomplete: "To change your password, fill in both the current and new password",
     submitLogin: "Login",
     submitRegister: "Register",
     switchToRegister: "Need an account? Register",
@@ -404,11 +429,20 @@ const elements = {
   startCreateBtn: $("#startCreateBtn"),
   promptLibraryBtn: $("#promptLibraryBtn"),
   langBtn: $("#langBtn"),
-  creditsBtn: $("#creditsBtn"),
-  creditsText: $("#creditsText"),
-  myWorksBtn: $("#myWorksBtn"),
   loginBtn: $("#loginBtn"),
-  logoutBtn: $("#logoutBtn"),
+  userMenuWrap: $("#userMenuWrap"),
+  userMenuButton: $("#userMenuButton"),
+  userMenuPanel: $("#userMenuPanel"),
+  userMenuAvatar: $("#userMenuAvatar"),
+  userMenuSummaryAvatar: $("#userMenuSummaryAvatar"),
+  userMenuName: $("#userMenuName"),
+  userMenuEmail: $("#userMenuEmail"),
+  userMenuId: $("#userMenuId"),
+  userMenuCredits: $("#userMenuCredits"),
+  profileBtn: $("#profileBtn"),
+  userCreditsBtn: $("#userCreditsBtn"),
+  userWorksBtn: $("#userWorksBtn"),
+  userLogoutBtn: $("#userLogoutBtn"),
   apiStatus: $("#apiStatus"),
   todayGeneratedText: $("#todayGeneratedText"),
   stickyComposerMount: $("#stickyComposerMount"),
@@ -505,13 +539,51 @@ function updateDailyMetric() {
   elements.todayGeneratedText.textContent = `${text("todayGeneratedPrefix")} ${formatDailyCount(state.stats.todayGenerated)} ${text("todayGeneratedSuffix")}`;
 }
 
+function getDisplayName(user = state.user) {
+  if (!user) return "";
+  const name = String(user.name || "").trim();
+  if (name) return name;
+  const email = String(user.email || "").trim();
+  return email ? email.split("@")[0] : (state.lang === "zh" ? "用户" : "User");
+}
+
+function getAvatarMarkup(user = state.user) {
+  const label = getDisplayName(user);
+  const avatarUrl = String(user?.avatarUrl || "").trim();
+  if (avatarUrl) {
+    return `<img src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(label)}">`;
+  }
+  const initial = Array.from(label)[0] || "U";
+  return `<span>${escapeHtml(initial.toUpperCase())}</span>`;
+}
+
+function closeUserMenu() {
+  elements.userMenuPanel?.classList.add("hidden");
+  elements.userMenuButton?.setAttribute("aria-expanded", "false");
+}
+
+function toggleUserMenu(forceOpen) {
+  if (!elements.userMenuPanel || !elements.userMenuButton || elements.userMenuWrap?.classList.contains("hidden")) return;
+  const shouldOpen = typeof forceOpen === "boolean" ? forceOpen : elements.userMenuPanel.classList.contains("hidden");
+  elements.userMenuPanel.classList.toggle("hidden", !shouldOpen);
+  elements.userMenuButton.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+}
+
 function updateNav() {
   const loggedIn = Boolean(state.user);
   elements.loginBtn.classList.toggle("hidden", loggedIn);
-  elements.logoutBtn.classList.toggle("hidden", !loggedIn);
-  elements.creditsBtn.classList.toggle("hidden", !loggedIn);
-  elements.myWorksBtn.classList.toggle("hidden", !loggedIn);
-  elements.creditsText.textContent = state.user ? `${text("credits")} ${state.user.credits}` : "0";
+  elements.userMenuWrap?.classList.toggle("hidden", !loggedIn);
+  if (loggedIn) {
+    const displayName = getDisplayName();
+    if (elements.userMenuAvatar) elements.userMenuAvatar.innerHTML = getAvatarMarkup();
+    if (elements.userMenuSummaryAvatar) elements.userMenuSummaryAvatar.innerHTML = getAvatarMarkup();
+    if (elements.userMenuName) elements.userMenuName.textContent = displayName;
+    if (elements.userMenuEmail) elements.userMenuEmail.textContent = state.user.email || "";
+    if (elements.userMenuId) elements.userMenuId.textContent = `${text("userId")}: ${state.user.id}`;
+    if (elements.userMenuCredits) elements.userMenuCredits.textContent = String(state.user.credits ?? 0);
+  } else {
+    closeUserMenu();
+  }
 
   const hasApiKey = Boolean(state.settings?.hasApiKey);
   elements.apiStatus.textContent = hasApiKey
@@ -550,6 +622,34 @@ function setComposerReference({ url = "", imageData = "", name = "", sourceGener
     sourceGenerationId: sourceGenerationId || null,
     conversationId: conversationId || null
   }];
+}
+
+function getLatestSuccessfulHistoryItem() {
+  for (let index = state.history.length - 1; index >= 0; index -= 1) {
+    const item = state.history[index];
+    if (item?.status === "done" && item.images?.[0]) return item;
+  }
+  return null;
+}
+
+function getConversationFallbackReference() {
+  const latestItem = getLatestSuccessfulHistoryItem();
+  if (!latestItem) return null;
+  return {
+    url: latestItem.images[0],
+    name: `generation-${latestItem.id}`,
+    sourceGenerationId: latestItem.id,
+    conversationId: latestItem.conversationId || state.activeConversationId || null
+  };
+}
+
+function seedComposerReferenceFromHistory() {
+  const latestReference = getConversationFallbackReference();
+  if (!latestReference) {
+    clearComposerReferences();
+    return;
+  }
+  setComposerReference(latestReference);
 }
 
 function openWorkspace(options = {}) {
@@ -613,13 +713,29 @@ function createComposer(sticky) {
     syncComposers(form);
   });
   textarea.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-      form.requestSubmit();
-    }
+    if (event.key !== "Enter" || event.isComposing || event.shiftKey) return;
+    event.preventDefault();
+    form.requestSubmit();
   });
   referenceInput.addEventListener("change", async () => {
-    const file = referenceInput.files?.[0];
+    const files = [...(referenceInput.files || [])];
+    const file = files[0];
     if (!file) return;
+    if (files.length > 1) {
+      referenceInput.value = "";
+      showToast(state.lang === "zh" ? "图生图一次只能上传 1 张图片" : "Image editing supports only 1 upload at a time.", "ri-error-warning-line");
+      return;
+    }
+    if (!String(file.type || "").startsWith("image/")) {
+      referenceInput.value = "";
+      showToast(state.lang === "zh" ? "请上传图片文件" : "Please upload an image file.", "ri-error-warning-line");
+      return;
+    }
+    if (file.size > MAX_EDIT_UPLOAD_BYTES) {
+      referenceInput.value = "";
+      showToast(state.lang === "zh" ? "单张图片不能超过 8 MiB" : "Each image must be 8 MiB or smaller.", "ri-error-warning-line");
+      return;
+    }
     const dataUrl = await blobToDataUrl(file);
     setComposerReference({ url: dataUrl, imageData: dataUrl, name: file.name, sourceGenerationId: null });
     referenceInput.value = "";
@@ -656,15 +772,24 @@ function createComposer(sticky) {
   return fragment;
 }
 
+function getAllowedImageSizes() {
+  const allowedSizes = state.settings?.allowedImageSizes;
+  return Array.isArray(allowedSizes) && allowedSizes.length ? allowedSizes : DEFAULT_ALLOWED_IMAGE_SIZES;
+}
+
+function normalizeSelectedImageSize(value) {
+  const allowedSizes = getAllowedImageSizes();
+  const normalizedValue = String(value || "auto");
+  return allowedSizes.includes(normalizedValue) ? normalizedValue : (allowedSizes[0] || "auto");
+}
+
 function getComposerOptions(form) {
-  const sizeValue = $(".size-input", form).value;
-  const customWidth = $(".custom-width-input", form)?.value || "2048";
-  const customHeight = $(".custom-height-input", form)?.value || "2048";
+  const sizeValue = normalizeSelectedImageSize($(".size-input", form).value);
   return {
-    size: sizeValue === "custom" ? `${customWidth}x${customHeight}` : sizeValue,
+    size: sizeValue,
     sizeMode: sizeValue,
-    customWidth,
-    customHeight,
+    customWidth: "",
+    customHeight: "",
     quality: $(".quality-input", form).value,
     background: $(".background-input", form).value,
     outputFormat: $(".format-input", form).value,
@@ -683,9 +808,7 @@ function syncComposers(sourceForm) {
     if (form !== sourceForm) {
       $(".prompt-box", form).value = state.draftPrompt;
       const mode = state.generationOptions.sizeMode || state.generationOptions.size;
-      $(".size-input", form).value = [...$(".size-input", form).options].some((option) => option.value === mode) ? mode : "custom";
-      $(".custom-width-input", form).value = state.generationOptions.customWidth || "2048";
-      $(".custom-height-input", form).value = state.generationOptions.customHeight || "2048";
+      $(".size-input", form).value = normalizeSelectedImageSize(mode);
       $(".quality-input", form).value = state.generationOptions.quality;
       $(".background-input", form).value = state.generationOptions.background;
       $(".format-input", form).value = state.generationOptions.outputFormat;
@@ -693,7 +816,8 @@ function syncComposers(sourceForm) {
     }
     updateCustomSizeVisibility(form);
     $(".model-label", form).textContent = "gpt-image-2";
-    const isImageEdit = state.references.length > 0;
+    const activeReference = state.references[0] || getConversationFallbackReference();
+    const isImageEdit = Boolean(activeReference?.url);
     const actionText = isImageEdit
       ? (state.lang === "zh" ? "修改" : "Edit")
       : text("create");
@@ -732,10 +856,11 @@ function syncReferences(sourceForm) {
   });
 }
 
-async function submitGeneration(form) {
+async function submitGeneration(form, options = {}) {
+  const { forceGenerate = false } = options;
   const prompt = $(".prompt-box", form).value.trim();
   if (!prompt) return;
-  const attachedReference = state.references[0] || null;
+  const attachedReference = forceGenerate ? null : (state.references[0] || getConversationFallbackReference());
   const isImageEdit = Boolean(attachedReference?.url);
   if (!state.user) {
     state.draftPrompt = prompt;
@@ -778,7 +903,7 @@ async function submitGeneration(form) {
     time: new Date().toISOString(),
     isPublic: state.publishToSquare,
     options: { ...state.generationOptions },
-    references: state.references.map((reference) => reference.url)
+    references: attachedReference?.url ? [attachedReference.url] : []
   };
   state.history.push(item);
   state.generating = true;
@@ -826,22 +951,22 @@ async function submitGeneration(form) {
     updateDailyMetric();
     await loadConversations();
     if (item.isPublic) await loadPublicGallery();
+    setComposerReference({
+      url: generation.images[0],
+      name: `generation-${generation.id}`,
+      sourceGenerationId: generation.id,
+      conversationId: generation.conversationId || state.activeConversationId || null
+    });
     if (isImageEdit) {
-      setComposerReference({
-        url: generation.images[0],
-        name: `generation-${generation.id}`,
-        sourceGenerationId: generation.id,
-        conversationId: generation.conversationId || state.activeConversationId || null
-      });
       showToast(state.lang === "zh" ? "已更新图片，可继续修改" : "Image updated. You can keep iterating.", "ri-magic-line");
     } else {
-      clearComposerReferences();
-      showToast(state.lang === "zh" ? "已生成" : "Created", "ri-sparkling-2-fill");
+      showToast(state.lang === "zh" ? "已生成，可继续修改" : "Created. You can keep iterating.", "ri-sparkling-2-fill");
     }
   } catch (error) {
     state.history = state.history.map((entry) =>
       entry.id === tempId ? { ...entry, status: "error", error: error.message } : entry
     );
+    if (!state.references.length) seedComposerReferenceFromHistory();
     if (/credit|额度|积分|Not enough/i.test(error.message)) openCreditsModal();
     else showToast(error.message, "ri-error-warning-line");
   } finally {
@@ -979,7 +1104,7 @@ function renderHistory() {
       syncComposers();
       syncReferences();
       const form = $(".composer", elements.stickyComposerMount);
-      submitGeneration(form);
+      submitGeneration(form, { forceGenerate: true });
     });
   });
   $$("[data-edit]", elements.historyList).forEach((button) => {
@@ -1546,6 +1671,7 @@ async function submitAuth(event) {
 }
 
 async function logout() {
+  closeUserMenu();
   await api("/api/auth/logout", { method: "POST" }).catch(() => null);
   state.user = null;
   state.history = [];
@@ -1617,7 +1743,7 @@ function openCreditsModal() {
   `);
   $("[data-checkin]", elements.modalLayer).addEventListener("click", submitCheckin);
   $("[data-redeem-form]", elements.modalLayer).addEventListener("submit", submitRedeem);
-  $("[data-history]", elements.modalLayer).addEventListener("click", openCreditHistoryModal);
+  $("[data-history]", elements.modalLayer).addEventListener("click", () => openCreditHistoryModal({ returnToCredits: true }));
   $("[data-close-auth]", elements.modalLayer).addEventListener("click", closeModal);
 }
 
@@ -1650,7 +1776,8 @@ async function submitRedeem(event) {
   }
 }
 
-async function openCreditHistoryModal() {
+async function openCreditHistoryModal(options = {}) {
+  const { returnToCredits = false } = options;
   if (!state.user) {
     openAuthModal("login");
     return;
@@ -1698,7 +1825,124 @@ async function openCreditHistoryModal() {
       <button class="modal-secondary" type="button" data-close-auth>${text("close")}</button>
     </section>
   `);
-  $("[data-close-auth]", elements.modalLayer).addEventListener("click", openCreditsModal);
+  $("[data-close-auth]", elements.modalLayer).addEventListener("click", returnToCredits ? openCreditsModal : closeModal);
+}
+
+function openProfileModal() {
+  if (!state.user) {
+    openAuthModal("login");
+    return;
+  }
+  openModal(`
+    <section class="modal">
+      <button class="close-modal" type="button"><i class="ri-close-line"></i></button>
+      <div class="modal-title">
+        <i class="ri-user-settings-line"></i>
+        <h2>${text("profile")}</h2>
+      </div>
+      <form id="profileForm" class="modal-form profile-modal-grid">
+        <div class="profile-avatar-row">
+          <div id="profileAvatarPreview" class="avatar-face avatar-face-lg" aria-hidden="true"></div>
+          <div class="profile-avatar-text">
+            <strong id="profileDisplayName">${escapeHtml(getDisplayName())}</strong>
+            <label class="profile-avatar-upload">
+              <i class="ri-image-edit-line"></i>
+              <span>${text("changeAvatar")}</span>
+              <input id="profileAvatarInput" type="file" accept="image/*">
+            </label>
+            <p class="profile-hint">${text("avatarHint")}</p>
+          </div>
+        </div>
+        <div class="profile-static-grid">
+          <label>${text("email")}<input type="text" value="${escapeHtml(state.user.email || "")}" readonly></label>
+          <label>${text("userId")}<input type="text" value="${escapeHtml(state.user.id || "")}" readonly></label>
+        </div>
+        <div class="profile-edit-grid">
+          <p class="profile-section-title">${text("profile")}</p>
+          <label>${text("username")}<input id="profileNameInput" type="text" maxlength="60" value="${escapeHtml(state.user.name || "")}" required></label>
+        </div>
+        <div class="profile-password-grid">
+          <p class="profile-section-title">${text("password")}</p>
+          <label>${text("currentPassword")}<input id="profileCurrentPasswordInput" type="password" autocomplete="current-password"></label>
+          <label>${text("newPassword")}<input id="profileNewPasswordInput" type="password" autocomplete="new-password"></label>
+          <label>${text("confirmPassword")}<input id="profileConfirmPasswordInput" type="password" autocomplete="new-password"></label>
+        </div>
+        <button class="modal-primary" type="submit">${text("save")}</button>
+      </form>
+    </section>
+  `);
+  const preview = $("#profileAvatarPreview", elements.modalLayer);
+  const avatarInput = $("#profileAvatarInput", elements.modalLayer);
+  const nameInput = $("#profileNameInput", elements.modalLayer);
+  const displayName = $("#profileDisplayName", elements.modalLayer);
+  const syncPreview = () => {
+    const nextName = nameInput?.value || state.user?.name || "";
+    if (displayName) displayName.textContent = nextName || getDisplayName();
+    if (!preview) return;
+    preview.innerHTML = getAvatarMarkup({
+      ...state.user,
+      name: nextName,
+      avatarUrl: avatarInput?.dataset.imageData || state.user?.avatarUrl || ""
+    });
+  };
+  syncPreview();
+  nameInput?.addEventListener("input", syncPreview);
+  avatarInput?.addEventListener("change", async () => {
+    const file = avatarInput.files?.[0];
+    if (!file) {
+      delete avatarInput.dataset.imageData;
+      syncPreview();
+      return;
+    }
+    avatarInput.dataset.imageData = await blobToDataUrl(file);
+    syncPreview();
+  });
+  $("#profileForm", elements.modalLayer)?.addEventListener("submit", submitProfileUpdate);
+}
+
+async function submitProfileUpdate(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = form.querySelector("button[type='submit']");
+  const name = String($("#profileNameInput", form)?.value || "").trim();
+  const currentPassword = String($("#profileCurrentPasswordInput", form)?.value || "");
+  const newPassword = String($("#profileNewPasswordInput", form)?.value || "");
+  const confirmPassword = String($("#profileConfirmPasswordInput", form)?.value || "");
+  const avatarData = String($("#profileAvatarInput", form)?.dataset.imageData || "");
+  if (!name) {
+    showToast(state.lang === "zh" ? "请输入用户名" : "Please enter a username", "ri-error-warning-line");
+    return;
+  }
+  const wantsPasswordChange = Boolean(currentPassword || newPassword || confirmPassword);
+  if (wantsPasswordChange && (!currentPassword || !newPassword)) {
+    showToast(text("passwordIncomplete"), "ri-error-warning-line");
+    return;
+  }
+  if (newPassword && newPassword !== confirmPassword) {
+    showToast(text("passwordMismatch"), "ri-error-warning-line");
+    return;
+  }
+  if (submit) submit.disabled = true;
+  try {
+    const payload = { name };
+    if (avatarData) payload.avatarData = avatarData;
+    if (wantsPasswordChange) {
+      payload.currentPassword = currentPassword;
+      payload.newPassword = newPassword;
+    }
+    const data = await api("/api/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+    state.user = data.user;
+    closeModal();
+    renderAll();
+    showToast(text("profileSaveSuccess"), "ri-checkbox-circle-line");
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  } finally {
+    if (submit) submit.disabled = false;
+  }
 }
 
 function formatTransactionType(type) {
@@ -1949,9 +2193,34 @@ function bindGlobalEvents() {
     renderAll();
   });
   elements.loginBtn.addEventListener("click", () => openAuthModal("login"));
-  elements.logoutBtn.addEventListener("click", logout);
-  elements.creditsBtn.addEventListener("click", openCreditsModal);
-  elements.myWorksBtn.addEventListener("click", openMyWorksModal);
+  elements.userMenuButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleUserMenu();
+  });
+  elements.profileBtn?.addEventListener("click", () => {
+    closeUserMenu();
+    openProfileModal();
+  });
+  elements.userCreditsBtn?.addEventListener("click", () => {
+    closeUserMenu();
+    openCreditHistoryModal({ returnToCredits: false });
+  });
+  elements.userWorksBtn?.addEventListener("click", () => {
+    closeUserMenu();
+    openMyWorksModal();
+  });
+  elements.userLogoutBtn?.addEventListener("click", () => {
+    closeUserMenu();
+    logout();
+  });
+  document.addEventListener("click", (event) => {
+    if (!elements.userMenuWrap || elements.userMenuWrap.classList.contains("hidden")) return;
+    if (elements.userMenuWrap.contains(event.target)) return;
+    closeUserMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeUserMenu();
+  });
   elements.librarySearchForm.addEventListener("submit", (event) => {
     event.preventDefault();
     state.librarySearch = elements.librarySearchInput.value;
@@ -2101,7 +2370,7 @@ async function switchToConversation(convId) {
     state.activeConversationId = convId;
     state.history = (data.messages || []).map(historyItemFromGeneration);
     state.draftPrompt = "";
-    clearComposerReferences();
+    seedComposerReferenceFromHistory();
     renderAll();
     setView("workspace");
     scrollToBottom();

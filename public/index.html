@@ -35,21 +35,44 @@
             <span data-i18n="promptLibrary">提示词库</span>
           </button>
           <button id="langBtn" class="icon-pill" type="button" title="Language">中/EN</button>
-          <button id="creditsBtn" class="nav-pill hidden" type="button">
-            <i class="ri-coin-line"></i>
-            <span id="creditsText">0</span>
-          </button>
-          <button id="myWorksBtn" class="nav-pill hidden" type="button">
-            <i class="ri-gallery-view-2"></i>
-            <span data-i18n="myWorks">我的作品</span>
-          </button>
           <button id="loginBtn" class="dark-pill" type="button">
             <i class="ri-login-circle-line"></i>
             <span data-i18n="login">登录</span>
           </button>
-          <button id="logoutBtn" class="nav-pill hidden" type="button">
-            <i class="ri-logout-circle-r-line"></i>
-          </button>
+          <div id="userMenuWrap" class="user-menu hidden">
+            <button id="userMenuButton" class="avatar-button" type="button" aria-haspopup="menu" aria-expanded="false">
+              <span id="userMenuAvatar" class="avatar-face" aria-hidden="true"></span>
+            </button>
+            <div id="userMenuPanel" class="user-dropdown hidden" role="menu">
+              <div class="user-dropdown-summary">
+                <div id="userMenuSummaryAvatar" class="avatar-face avatar-face-lg" aria-hidden="true"></div>
+                <div class="user-summary-text">
+                  <strong id="userMenuName"></strong>
+                  <span id="userMenuEmail"></span>
+                  <span id="userMenuId"></span>
+                </div>
+              </div>
+              <button id="profileBtn" class="user-menu-item" type="button">
+                <i class="ri-user-settings-line"></i>
+                <span data-i18n="profile">个人信息</span>
+              </button>
+              <button id="userCreditsBtn" class="user-menu-item user-menu-item-split" type="button">
+                <span class="user-menu-item-leading">
+                  <i class="ri-coin-line"></i>
+                  <span data-i18n="credits">积分</span>
+                </span>
+                <strong id="userMenuCredits">0</strong>
+              </button>
+              <button id="userWorksBtn" class="user-menu-item" type="button">
+                <i class="ri-gallery-view-2"></i>
+                <span data-i18n="myWorks">我的作品</span>
+              </button>
+              <button id="userLogoutBtn" class="user-menu-item" type="button">
+                <i class="ri-logout-circle-r-line"></i>
+                <span data-i18n="logout">退出</span>
+              </button>
+            </div>
+          </div>
         </nav>
       </header>
 
@@ -154,7 +177,7 @@
           <div class="composer-bar">
             <label class="add-reference-button" title="Reference image">
               <i class="ri-add-line"></i>
-              <input class="reference-input" type="file" accept="image/*" multiple>
+              <input class="reference-input" type="file" accept="image/*">
             </label>
             <textarea class="prompt-box" rows="1" placeholder="描述你想创作的图片..."></textarea>
             <div class="composer-spacer"></div>
@@ -170,24 +193,8 @@
                 <option value="1024x1024">1:1</option>
                 <option value="1024x1536">2:3</option>
                 <option value="1536x1024">3:2</option>
-                <option value="2048x2048">2K 1:1</option>
-                <option value="2048x3072">2K 2:3</option>
-                <option value="3072x2048">2K 3:2</option>
-                <option value="2880x3840">4K 3:4</option>
-                <option value="3840x2880">4K 4:3</option>
-                <option value="custom">自定义</option>
               </select>
             </label>
-            <div class="custom-size-row hidden">
-              <label>
-                <span>宽度</span>
-                <input class="custom-width-input" type="number" min="1024" max="3840" step="16" value="2048">
-              </label>
-              <label>
-                <span>高度</span>
-                <input class="custom-height-input" type="number" min="1024" max="3840" step="16" value="2048">
-              </label>
-            </div>
             <label>
               <span data-i18n="quality">质量</span>
               <select class="quality-input">
