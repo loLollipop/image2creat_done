@@ -817,7 +817,7 @@ function createComposer(sticky) {
     advanced.classList.toggle("hidden");
     optionsToggle.classList.toggle("active", !advanced.classList.contains("hidden"));
   });
-  publicInput.addEventListener("change", () => {
+  publicInput?.addEventListener("change", () => {
     state.publishToSquare = publicInput.checked;
     syncComposers(form);
   });
@@ -869,8 +869,8 @@ function getComposerOptions(form) {
     quality: $(".quality-input", form).value,
     background: $(".background-input", form).value,
     outputFormat: $(".format-input", form).value,
-    isPublic: $(".public-input", form).checked,
-    imageCount
+    isPublic: Boolean($(".public-input", form)?.checked),
+    imageCount: state.imageCount
   };
 }
 
@@ -894,8 +894,9 @@ function syncComposers(sourceForm) {
       $(".quality-input", form).value = state.generationOptions.quality;
       $(".background-input", form).value = state.generationOptions.background;
       $(".format-input", form).value = state.generationOptions.outputFormat;
-      $(".public-input", form).checked = state.publishToSquare;
     }
+    const publicToggle = $(".public-input", form);
+    if (publicToggle) publicToggle.checked = state.publishToSquare;
     updateCustomSizeVisibility(form);
     $(".model-label", form).textContent = "gpt-image-2";
     const activeReference = state.references[0] || getConversationFallbackReference();
@@ -1281,7 +1282,6 @@ function groupHistoryIntoTurns(items) {
 }
 
 function renderHistory() {
-  // Update sidebar username
   const sidebarUserName = document.getElementById("sidebarUserName");
   if (sidebarUserName) sidebarUserName.textContent = state.user?.name || state.user?.email || "";
 
@@ -1311,50 +1311,145 @@ function renderHistory() {
   }
 }
 
-  $$("[data-retry]", elements.historyList).forEach((button) => {
-    button.addEventListener("click", () => {
-      state.draftPrompt = button.dataset.retry;
-      clearComposerReferences();
-      syncComposers();
-      syncReferences();
-      const form = $(".composer", elements.stickyComposerMount);
-      submitGeneration(form, { forceGenerate: true });
-    });
-  });
-  $$("[data-edit]", elements.historyList).forEach((button) => {
-    button.addEventListener("click", () => {
-      state.draftPrompt = button.dataset.edit;
-      clearComposerReferences();
-      syncComposers();
-      syncReferences();
-      $(".prompt-box", $(".composer", elements.stickyComposerMount) || document)?.focus();
-    });
-  });
-  $$("[data-edit-image]", elements.historyList).forEach((button) => {
-    button.addEventListener("click", () => {
-      const item = state.history.find((entry) => String(entry.id) === button.dataset.editImage);
-      if (item?.images?.[0]) openImageEditor(item.images[0], item.id, item.conversationId || null);
-    });
-    const generations = (data.generations || []).map(historyItemFromGeneration);
-    if (!generations.length) throw new Error("No image was returned");
-    const replacement = generations[0];
-    // Keep the new row in this turn by re-using the same requestId on the client.
-    replacement.requestId = turn.requestId || turn.id;
-    state.history = state.history.map((item) =>
-      item.id === entry.id ? replacement : item
-    );
-    state.allGenerations = dedupeHistoryById([replacement, ...state.allGenerations])
-      .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
-    state.user.credits = data.credits;
-    showToast(state.lang === "zh" ? "已重试" : "Retried", "ri-refresh-line");
-  } catch (error) {
-    state.history = state.history.map((item) =>
-      item.id === entry.id ? { ...item, status: "error", error: error.message } : item
-    );
-    showToast(error.message, "ri-error-warning-line");
-  } finally {
-    renderAll();
+function renderTurnImageCard(item, turn) {
+  const fragment = elements.turnImageTemplate.content.cloneNode(true);
+  const figure = $(".turn-image", fragment);
+  const picture = $(".turn-image-pic", figure);
+  const skeleton = $(".turn-image-skeleton", figure);
+  const statusText = $(".turn-image-status-text", figure);
+  const errorBox = $(".turn-image-error", figure);
+  const errorText = $(".turn-image-error-text", figure);
+  const actions = $$(".turn-image-action", figure);
+  figure.dataset.imageId = item.id || "";
+  figure.dataset.status = item.status || "queued";
+
+  if (item.status === "done" && item.images?.[0]) {
+    picture.src = item.images[0];
+    picture.alt = truncate(item.prompt || turn.prompt || "", 120);
+    picture.classList.remove("hidden");
+    skeleton.classList.add("hidden");
+    errorBox.classList.add("hidden");
+  } else if (item.status === "error") {
+    skeleton.classList.add("hidden");
+    picture.classList.add("hidden");
+    errorBox.classList.remove("hidden");
+    errorText.textContent = item.error || (state.lang === "zh" ? "生成失败" : "Generation failed");
+    actions.forEach((button) => { button.disabled = true; });
+  } else {
+    statusText.textContent = text("generating");
+    picture.classList.add("hidden");
+    errorBox.classList.add("hidden");
+    actions.forEach((button) => { button.disabled = true; });
   }
+
+  actions.forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!item.images?.[0]) return;
+      const action = button.dataset.action;
+      if (action === "download") {
+        const link = document.createElement("a");
+        link.href = item.images[0];
+        link.download = `${item.id || "image"}.png`;
+        link.click();
+        return;
+      }
+      if (action === "continue-edit") {
+        openImageEditor(item.images[0], item.id, item.conversationId || null);
+        return;
+      }
+      if (action === "lightbox") {
+        openLightbox(item.images[0], item.prompt || turn.prompt || "");
+      }
+    });
+  });
+
+  return figure;
+}
+
+function renderTurnCard(turn) {
+  const fragment = elements.turnTemplate.content.cloneNode(true);
+  const card = $(".turn-card", fragment);
+  const references = $(".turn-references", card);
+  const promptText = $(".turn-prompt-text", card);
+  const statusBox = $(".turn-status", card);
+  const errorBox = $(".turn-error", card);
+  const grid = $(".turn-grid", card);
+  const reuseButton = $(".turn-reuse", card);
+  const regenerateButton = $(".turn-regenerate", card);
+  const deleteButton = $(".turn-delete", card);
+  const sizeChip = $(".turn-size", card);
+  const modelChip = $(".turn-model", card);
+  const timeChip = $(".turn-time", card);
+  card.dataset.turnId = turn.id;
+  promptText.textContent = turn.prompt || "";
+
+  if (turn.references?.length) {
+    references.classList.remove("hidden");
+    references.innerHTML = turn.references.map((url) => `<img src="${escapeHtml(url)}" alt="reference">`).join("");
+  }
+
+  if (turn.status !== "done") {
+    statusBox.classList.remove("hidden");
+    statusBox.textContent = turn.status === "error"
+      ? (state.lang === "zh" ? "生成失败" : "Generation failed")
+      : text("generating");
+  }
+
+  if (turn.error) {
+    errorBox.classList.remove("hidden");
+    errorBox.textContent = turn.error;
+  }
+
+  turn.items.forEach((item) => grid.appendChild(renderTurnImageCard(item, turn)));
+  sizeChip.textContent = turn.options?.size || "auto";
+  modelChip.textContent = turn.items[0]?.model || "gpt-image-2";
+  timeChip.textContent = formatDateTime(turn.time);
+
+  reuseButton?.addEventListener("click", () => {
+    state.draftPrompt = turn.prompt || "";
+    if (turn.options) state.generationOptions = { ...state.generationOptions, ...turn.options };
+    if (turn.references?.[0]) {
+      setComposerReference({
+        url: turn.references[0],
+        sourceGenerationId: turn.sourceGenerationId || null,
+        conversationId: turn.conversationId || state.activeConversationId || null
+      });
+      openWorkspace({ prompt: turn.prompt || "", preserveReference: true });
+    } else {
+      clearComposerReferences();
+      syncComposers();
+      syncReferences();
+      openWorkspace({ prompt: turn.prompt || "" });
+    }
+  });
+
+  regenerateButton?.addEventListener("click", () => {
+    state.draftPrompt = turn.prompt || "";
+    if (turn.options) state.generationOptions = { ...state.generationOptions, ...turn.options };
+    if (turn.references?.[0]) {
+      setComposerReference({
+        url: turn.references[0],
+        sourceGenerationId: turn.sourceGenerationId || null,
+        conversationId: turn.conversationId || state.activeConversationId || null
+      });
+      openWorkspace({ prompt: turn.prompt || "", preserveReference: true });
+    } else {
+      clearComposerReferences();
+      syncComposers();
+      syncReferences();
+    }
+    const form = $(".composer", elements.stickyComposerMount);
+    if (form) submitGeneration(form, { forceGenerate: !turn.references?.[0] });
+  });
+
+  deleteButton?.addEventListener("click", () => {
+    const turnKey = turn.requestId || turn.id;
+    state.history = state.history.filter((entry) => (entry.requestId || `solo_${entry.id}`) !== turnKey);
+    state.allGenerations = state.allGenerations.filter((entry) => (entry.requestId || `solo_${entry.id}`) !== turnKey);
+    renderAll();
+  });
+
+  return card;
 }
 
 function renderExamples() {
