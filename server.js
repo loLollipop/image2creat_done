@@ -41,6 +41,7 @@ const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const MAX_EDIT_IMAGE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MODEL = "gpt-image-2";
+const DEFAULT_CHATGPT2API_BASE_URL = "http://chatgpt2api:80";
 const CHECKIN_CREDIT = Number.parseInt(process.env.CHECKIN_CREDIT || "1", 10) || 1;
 const ALLOWED_IMAGE_SIZES = ["auto", "1024x1024", "1024x1536", "1536x1024"];
 const ALLOWED_IMAGE_SIZE_SET = new Set(ALLOWED_IMAGE_SIZES);
@@ -183,8 +184,8 @@ function getUpstreamConfig(settings = {}, upstreamId = getActiveUpstreamId(setti
   }
   return {
     id: "chatgpt2api",
-    apiKey: settings.openaiApiKey || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "",
-    baseUrl: String(settings.apiBaseUrl || process.env.AI_API_BASE_URL || process.env.OPENAI_BASE_URL || "").trim().replace(/\/+$/, ""),
+    apiKey: settings.openaiApiKey || process.env.CHATGPT2API_AUTH_KEY || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "",
+    baseUrl: String(settings.apiBaseUrl || process.env.CHATGPT2API_IMAGE_BASE_URL || process.env.UPSTREAM_PROXY_BASE_URL || process.env.AI_API_BASE_URL || process.env.OPENAI_BASE_URL || "").trim().replace(/\/+$/, ""),
     model: (settings.model || "").trim()
   };
 }
@@ -212,6 +213,23 @@ function getOpenAIImageEndpoint(settings = {}) {
   return joinUpstreamPath(getOpenAIBaseUrl(settings), "images/generations");
 }
 
+function getNativeChatgpt2apiConfig(settings = {}) {
+  const cfg = getUpstreamConfig(settings, "chatgpt2api");
+  const baseUrl = String(cfg.baseUrl || DEFAULT_CHATGPT2API_BASE_URL).trim().replace(/\/+$/, "");
+  const apiKey = String(cfg.apiKey || "").trim();
+  return { baseUrl, apiKey };
+}
+
+function getNativeChatgpt2apiImageEndpoint(settings = {}) {
+  const { baseUrl } = getNativeChatgpt2apiConfig(settings);
+  return joinUpstreamPath(baseUrl, "images/generations");
+}
+
+function getNativeChatgpt2apiEditEndpoint(settings = {}) {
+  const { baseUrl } = getNativeChatgpt2apiConfig(settings);
+  return joinUpstreamPath(baseUrl, "images/edits");
+}
+
 function getOpenAIResponsesEndpoint(settings = {}) {
   return joinUpstreamPath(getOpenAIBaseUrl(settings), "responses");
 }
@@ -228,9 +246,10 @@ function maskApiKey(key) {
 
 function publicSettings(settings) {
   const active = getUpstreamConfig(settings);
+  const imageGeneration = getNativeChatgpt2apiConfig(settings);
   return {
-    hasApiKey: Boolean(active.apiKey && active.baseUrl),
-    model: active.model || settings.model || DEFAULT_MODEL,
+    hasApiKey: Boolean(imageGeneration.apiKey && imageGeneration.baseUrl),
+    model: getUpstreamConfig(settings, "chatgpt2api").model || settings.model || DEFAULT_MODEL,
     activeUpstream: active.id,
     allowRegistration: Boolean(settings.allowRegistration),
     requireApproval: Boolean(settings.requireApproval),
@@ -437,6 +456,81 @@ async function callOpenAIImages(settings, payload) {
   return data;
 }
 
+async function callNativeChatgpt2apiImages(settings, payload) {
+  const { apiKey } = getNativeChatgpt2apiConfig(settings);
+  if (!apiKey) {
+    throw httpError("chatgpt2api auth key is not configured", 400);
+  }
+
+  const response = await fetch(getNativeChatgpt2apiImageEndpoint(settings), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: payload.model,
+      prompt: payload.prompt,
+      n: payload.n,
+      size: payload.size,
+      response_format: "b64_json"
+    })
+  });
+
+  const text = await response.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!response.ok) {
+    const message = data?.error?.message || data?.detail?.error || data?.detail || "chatgpt2api image request failed";
+    throw httpError(String(message), response.status, data);
+  }
+
+  return data;
+}
+
+async function callNativeChatgpt2apiImageEdits(settings, payload) {
+  const { apiKey } = getNativeChatgpt2apiConfig(settings);
+  if (!apiKey) {
+    throw httpError("chatgpt2api auth key is not configured", 400);
+  }
+
+  const form = new FormData();
+  form.set("model", payload.model);
+  form.set("prompt", payload.prompt);
+  form.set("n", String(payload.n || 1));
+  if (payload.size) form.set("size", payload.size);
+  form.set("response_format", "b64_json");
+  form.set("image", await imageSourceToBlob(payload.imageData), "image.png");
+
+  const response = await fetch(getNativeChatgpt2apiEditEndpoint(settings), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: form
+  });
+
+  const text = await response.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!response.ok) {
+    const message = data?.error?.message || data?.detail?.error || data?.detail || "chatgpt2api image edit request failed";
+    throw httpError(String(message), response.status, data);
+  }
+
+  return data;
+}
+
 async function callOpenAIResponses(settings, payload) {
   const apiKey = getOpenAIApiKey(settings);
   if (!apiKey) {
@@ -630,6 +724,7 @@ async function saveGeneratedImages(user, request, openaiResult, upstreamUsed = "
       conversationId: request.conversationId || null,
       operationType: request.operationType || "generate",
       sourceGenerationId: request.sourceGenerationId || null,
+      requestId: request.requestId || null,
       prompt: request.prompt,
       model: request.model,
       size: request.size,
@@ -1364,6 +1459,43 @@ async function routeApi(req, res, url) {
     return sendJson(res, status || 502, data ?? {});
   }
 
+  // ---------- Upstream backup download (binary stream) ----------
+  if (req.method === "GET" && url.pathname === "/api/admin/upstream/backups/download") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    ensureAdmin(current);
+    if (!upstreamApi.isConfigured()) {
+      return sendJson(res, 503, { error: "Upstream (chatgpt2api) is not configured" });
+    }
+    const key = url.searchParams.get("key") || "";
+    const adminUrl = upstreamApi.buildAdminUrl ? upstreamApi.buildAdminUrl(`/api/backups/download`, { key }) : null;
+    if (!adminUrl) {
+      return sendJson(res, 500, { error: "Cannot build upstream URL" });
+    }
+    const { authKey } = upstreamApi.getConfig ? upstreamApi.getConfig() : {};
+    const transport = adminUrl.protocol === "https:" ? require("https") : require("http");
+    const proxyReq = transport.request({
+      method: "GET",
+      hostname: adminUrl.hostname,
+      port: adminUrl.port || (adminUrl.protocol === "https:" ? 443 : 80),
+      path: `${adminUrl.pathname}${adminUrl.search || ""}`,
+      headers: { Authorization: `Bearer ${authKey || ""}`, Accept: "*/*" },
+      timeout: 120000
+    }, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode || 502, {
+        "Content-Type": proxyRes.headers["content-type"] || "application/octet-stream",
+        "Content-Disposition": proxyRes.headers["content-disposition"] || "attachment",
+        ...(proxyRes.headers["content-length"] ? { "Content-Length": proxyRes.headers["content-length"] } : {})
+      });
+      proxyRes.pipe(res);
+    });
+    proxyReq.on("error", () => {
+      if (!res.headersSent) sendJson(res, 502, { error: "Upstream backup download failed" });
+    });
+    proxyReq.end();
+    return;
+  }
+
   // ---------- Conversations CRUD ----------
   if (req.method === "POST" && url.pathname === "/api/conversations") {
     const current = await getCurrentUser(req);
@@ -1422,6 +1554,28 @@ async function routeApi(req, res, url) {
     return sendJson(res, 204, null);
   }
 
+  // Turn-grouped view of a conversation: one turn = one generation_request,
+  // mirroring the chatgpt2api workbench data model where each user submission
+  // produces N images grouped under a single turn card.
+  const convTurnsMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)\/turns$/);
+  if (convTurnsMatch && req.method === "GET") {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    const conversation = await store.getConversationById(convTurnsMatch[1]);
+    if (!conversation || conversation.userId !== current.user.id) {
+      throw httpError("Conversation not found", 404);
+    }
+    const rawTurns = await store.listConversationTurns(conversation.id);
+    const turns = rawTurns.map((turn) => ({
+      ...turn,
+      images: turn.images.map((image) => ({
+        ...image,
+        imageUrl: `/api/images/${image.id}/file`
+      }))
+    }));
+    return sendJson(res, 200, { conversation, turns });
+  }
+
   if (req.method === "GET" && url.pathname === "/api/images/history") {
     const current = await getCurrentUser(req);
     ensureAuthenticated(current);
@@ -1449,8 +1603,9 @@ async function routeApi(req, res, url) {
     const body = await readJsonBody(req);
     const prompt = cleanPrompt(body.prompt);
     const settings = await store.getSettings();
-    if (!getOpenAIApiKey(settings) || !getOpenAIBaseUrl(settings)) {
-      throw httpError("AI API is not configured", 400);
+    const nativeChatgpt2api = getNativeChatgpt2apiConfig(settings);
+    if (!nativeChatgpt2api.baseUrl || !nativeChatgpt2api.apiKey) {
+      throw httpError("chatgpt2api image API is not configured", 400);
     }
 
     const user = await store.getUserById(current.user.id);
@@ -1467,8 +1622,8 @@ async function routeApi(req, res, url) {
     const n = sanitizePositiveInt(body.n, 1, maxImages);
     const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
     const totalCost = costPerImage * n;
-    const activeUpstream = getActiveUpstreamId(settings);
-    const activeModel = getUpstreamConfig(settings, activeUpstream).model;
+    const activeModel = getUpstreamConfig(settings, "chatgpt2api").model;
+    const auditId = randomId("req_");
     const request = {
       model: String(activeModel || settings.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
       prompt,
@@ -1480,7 +1635,8 @@ async function routeApi(req, res, url) {
       isPublic: body.isPublic === true,
       conversationId,
       operationType: "generate",
-      sourceGenerationId
+      sourceGenerationId,
+      requestId: auditId
     };
     const openaiRequest = {
       model: request.model,
@@ -1491,7 +1647,6 @@ async function routeApi(req, res, url) {
       background: request.background,
       output_format: request.output_format
     };
-    const auditId = randomId("req_");
     await store.insertGenerationRequest({
       id: auditId,
       userId: user.id,
@@ -1520,14 +1675,14 @@ async function routeApi(req, res, url) {
     }
 
     try {
-      const openaiResult = await callOpenAIImages(settings, openaiRequest);
+      const openaiResult = await callNativeChatgpt2apiImages(settings, openaiRequest);
       if (!conversationId) {
         const conversation = await store.createConversation(user.id, prompt.slice(0, 60));
         conversationId = conversation.id;
         autoCreatedConversationId = conversation.id;
         request.conversationId = conversation.id;
       }
-      const saved = await saveGeneratedImages(user, request, openaiResult, activeUpstream);
+      const saved = await saveGeneratedImages(user, request, openaiResult, "chatgpt2api");
       if (!saved.length) {
         throw httpError("OpenAI did not return a savable image", 502);
       }
@@ -1596,8 +1751,9 @@ async function routeApi(req, res, url) {
     }
 
     const settings = await store.getSettings();
-    if (!getOpenAIApiKey(settings) || !getOpenAIBaseUrl(settings)) {
-      throw httpError("AI API is not configured", 400);
+    const nativeChatgpt2api = getNativeChatgpt2apiConfig(settings);
+    if (!nativeChatgpt2api.baseUrl || !nativeChatgpt2api.apiKey) {
+      throw httpError("chatgpt2api image API is not configured", 400);
     }
 
     const user = await store.getUserById(current.user.id);
@@ -1610,8 +1766,8 @@ async function routeApi(req, res, url) {
     let generationsPersisted = false;
     const sourceGenerationId = await resolveSourceGenerationForRequest(user, body.sourceGenerationId);
     const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
-    const activeUpstream = getActiveUpstreamId(settings);
-    const activeModel = getUpstreamConfig(settings, activeUpstream).model;
+    const activeModel = getUpstreamConfig(settings, "chatgpt2api").model;
+    const auditId = randomId("req_");
     const request = {
       model: String(activeModel || settings.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
       prompt,
@@ -1623,9 +1779,9 @@ async function routeApi(req, res, url) {
       isPublic: body.isPublic === true,
       conversationId,
       operationType: "edit",
-      sourceGenerationId
+      sourceGenerationId,
+      requestId: auditId
     };
-    const auditId = randomId("req_");
     await store.insertGenerationRequest({
       id: auditId,
       userId: user.id,
@@ -1665,14 +1821,14 @@ async function routeApi(req, res, url) {
     };
 
     try {
-      const openaiResult = await callOpenAIImageEdits(settings, payload);
+      const openaiResult = await callNativeChatgpt2apiImageEdits(settings, payload);
       if (!conversationId) {
         const conversation = await store.createConversation(user.id, prompt.slice(0, 60));
         conversationId = conversation.id;
         autoCreatedConversationId = conversation.id;
         request.conversationId = conversation.id;
       }
-      const saved = await saveGeneratedImages(user, request, openaiResult, activeUpstream);
+      const saved = await saveGeneratedImages(user, request, openaiResult, "chatgpt2api");
       if (!saved.length) {
         throw httpError("OpenAI did not return a savable edited image", 502);
       }
@@ -1765,8 +1921,13 @@ async function routeApi(req, res, url) {
 
 async function serveStatic(req, res, url) {
   const pathname = decodeURIComponent(url.pathname);
-  const requestedPath = pathname === "/" ? "/index.html" : pathname === "/admin" ? "/admin.html" : pathname;
+  let requestedPath = pathname === "/" ? "/index.html" : pathname === "/admin" ? "/admin.html" : pathname;
+  // /playground/ → serve playground SPA index
+  if (requestedPath === "/playground" || requestedPath === "/playground/") {
+    requestedPath = "/playground/index.html";
+  }
   const absolutePath = path.normalize(path.join(PUBLIC_DIR, requestedPath));
+  const isAssetRequest = path.extname(pathname) !== "";
   if (absolutePath !== PUBLIC_DIR && !absolutePath.startsWith(PUBLIC_DIR + path.sep)) {
     return sendError(res, 403, "Forbidden");
   }
@@ -1776,12 +1937,30 @@ async function serveStatic(req, res, url) {
     if (!stat.isFile()) throw new Error("not a file");
     const extension = path.extname(absolutePath).toLowerCase();
     const bytes = await fs.readFile(absolutePath);
+    const cacheControl = extension === ".html"
+      ? "no-store"
+      : extension === ".css" || extension === ".js"
+        ? "no-cache"
+        : "public, max-age=3600";
     res.writeHead(200, {
       "Content-Type": mimeTypes.get(extension) || "application/octet-stream",
-      "Cache-Control": extension === ".html" ? "no-store" : "public, max-age=3600"
+      "Cache-Control": cacheControl
     });
     res.end(bytes);
   } catch {
+    if (isAssetRequest) {
+      return sendError(res, 404, "Static asset not found");
+    }
+    // For paths under /playground/, fall back to playground SPA
+    if (pathname.startsWith("/playground")) {
+      const html = await fs.readFile(path.join(PUBLIC_DIR, "playground", "index.html"), "utf8");
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store"
+      });
+      res.end(html);
+      return;
+    }
     const html = await fs.readFile(path.join(PUBLIC_DIR, "index.html"), "utf8");
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
@@ -1791,9 +1970,321 @@ async function serveStatic(req, res, url) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// /api-proxy/ — OpenAI-compatible proxy for the embedded Playground SPA.
+// Authenticates via session cookie, deducts credits, then forwards to the
+// configured upstream (chatgpt2api / cpa).
+// ---------------------------------------------------------------------------
+
+async function readRawBody(req, limit = MAX_PROXY_BODY_BYTES) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw httpError("Request body is too large", 413);
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function routeApiProxy(req, res, url) {
+  const suffix = url.pathname.replace(/^\/api-proxy\//, "");
+
+  // POST /api-proxy/v1/images/generations
+  if (req.method === "POST" && (suffix === "v1/images/generations" || suffix === "images/generations")) {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    enforceGenerationRate(current.user.id);
+
+    const rawBody = await readRawBody(req);
+    const body = JSON.parse(rawBody.toString("utf8") || "{}");
+    const settings = await store.getSettings();
+    const upstreamId = getActiveUpstreamId(settings);
+    const cfg = getUpstreamConfig(settings, upstreamId);
+    if (!cfg.baseUrl || !cfg.apiKey) {
+      throw httpError("Upstream image API is not configured", 400);
+    }
+
+    const user = await store.getUserById(current.user.id);
+    if (!user || user.status !== "active") throw httpError("Account is not active", 403);
+
+    const n = Math.max(1, Math.min(Number(body.n) || 1, Number(settings.maxImagesPerRequest || 4)));
+    const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
+    const totalCost = costPerImage * n;
+    const auditId = randomId("pgp_");
+    const prompt = cleanPrompt(body.prompt);
+
+    await store.insertGenerationRequest({
+      id: auditId,
+      userId: user.id,
+      prompt,
+      ipAddress: getClientIp(req),
+      userAgent: getUserAgent(req),
+      isPublic: false,
+      status: "pending"
+    });
+
+    let reservedCredits = false;
+    if (totalCost > 0) {
+      reservedCredits = await store.reserveCredits(user.id, totalCost, {
+        type: "consume_generate",
+        refType: "generation_request",
+        refId: auditId,
+        note: "Playground image generation"
+      });
+      if (!reservedCredits) {
+        await store.updateGenerationRequest(auditId, { status: "failed", errorMessage: "Not enough credits" });
+        throw httpError("Not enough credits", 402);
+      }
+    }
+
+    try {
+      const model = String(body.model || cfg.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      const upstreamBody = {
+        model,
+        prompt,
+        n,
+        size: body.size || "auto",
+        response_format: "b64_json"
+      };
+      if (body.quality) upstreamBody.quality = body.quality;
+      if (body.background) upstreamBody.background = body.background;
+      if (body.output_format) upstreamBody.output_format = body.output_format;
+      if (body.moderation) upstreamBody.moderation = body.moderation;
+
+      const endpoint = joinUpstreamPath(cfg.baseUrl, "images/generations");
+      const upstreamRes = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cfg.apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(upstreamBody)
+      });
+
+      const upstreamText = await upstreamRes.text();
+      let upstreamData;
+      try { upstreamData = upstreamText ? JSON.parse(upstreamText) : {}; } catch { upstreamData = { raw: upstreamText }; }
+
+      if (!upstreamRes.ok) {
+        const msg = upstreamData?.error?.message || upstreamData?.detail || "Upstream image generation failed";
+        throw httpError(String(msg), upstreamRes.status, upstreamData);
+      }
+
+      await store.updateGenerationRequest(auditId, { status: "success" });
+      reservedCredits = false;
+
+      res.writeHead(upstreamRes.status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(upstreamText);
+    } catch (error) {
+      if (reservedCredits) {
+        await store.addCredits(user.id, totalCost, {
+          type: "refund_failure",
+          refType: "generation_request",
+          refId: auditId,
+          note: "Refund: playground generation failed"
+        }).catch((e) => console.error(e));
+      }
+      await store.updateGenerationRequest(auditId, {
+        status: "failed",
+        errorMessage: String(error.message || error).slice(0, 2000)
+      }).catch((e) => console.error(e));
+      throw error;
+    }
+    return;
+  }
+
+  // POST /api-proxy/v1/images/edits — multipart/form-data passthrough
+  if (req.method === "POST" && (suffix === "v1/images/edits" || suffix === "images/edits")) {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    enforceGenerationRate(current.user.id);
+
+    const settings = await store.getSettings();
+    const upstreamId = getActiveUpstreamId(settings);
+    const cfg = getUpstreamConfig(settings, upstreamId);
+    if (!cfg.baseUrl || !cfg.apiKey) {
+      throw httpError("Upstream image API is not configured", 400);
+    }
+
+    const user = await store.getUserById(current.user.id);
+    if (!user || user.status !== "active") throw httpError("Account is not active", 403);
+
+    const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
+    const auditId = randomId("pge_");
+
+    await store.insertGenerationRequest({
+      id: auditId,
+      userId: user.id,
+      prompt: "(playground edit)",
+      ipAddress: getClientIp(req),
+      userAgent: getUserAgent(req),
+      isPublic: false,
+      status: "pending"
+    });
+
+    let reservedCredits = false;
+    if (costPerImage > 0) {
+      reservedCredits = await store.reserveCredits(user.id, costPerImage, {
+        type: "consume_generate",
+        refType: "generation_request",
+        refId: auditId,
+        note: "Playground image edit"
+      });
+      if (!reservedCredits) {
+        await store.updateGenerationRequest(auditId, { status: "failed", errorMessage: "Not enough credits" });
+        throw httpError("Not enough credits", 402);
+      }
+    }
+
+    try {
+      const rawBody = await readRawBody(req);
+      const contentType = req.headers["content-type"] || "multipart/form-data";
+      const endpoint = joinUpstreamPath(cfg.baseUrl, "images/edits");
+      const upstreamRes = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cfg.apiKey}`,
+          "Content-Type": contentType
+        },
+        body: rawBody
+      });
+
+      const upstreamText = await upstreamRes.text();
+      if (!upstreamRes.ok) {
+        let msg;
+        try { msg = JSON.parse(upstreamText)?.error?.message || "Upstream image edit failed"; } catch { msg = "Upstream image edit failed"; }
+        throw httpError(String(msg), upstreamRes.status);
+      }
+
+      await store.updateGenerationRequest(auditId, { status: "success" });
+      reservedCredits = false;
+
+      res.writeHead(upstreamRes.status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(upstreamText);
+    } catch (error) {
+      if (reservedCredits) {
+        await store.addCredits(user.id, costPerImage, {
+          type: "refund_failure",
+          refType: "generation_request",
+          refId: auditId,
+          note: "Refund: playground edit failed"
+        }).catch((e) => console.error(e));
+      }
+      await store.updateGenerationRequest(auditId, {
+        status: "failed",
+        errorMessage: String(error.message || error).slice(0, 2000)
+      }).catch((e) => console.error(e));
+      throw error;
+    }
+    return;
+  }
+
+  // POST /api-proxy/v1/responses — Responses API passthrough
+  if (req.method === "POST" && (suffix === "v1/responses" || suffix === "responses")) {
+    const current = await getCurrentUser(req);
+    ensureAuthenticated(current);
+    enforceGenerationRate(current.user.id);
+
+    const settings = await store.getSettings();
+    const cfg = getUpstreamConfig(settings);
+    if (!cfg.baseUrl || !cfg.apiKey) {
+      throw httpError("Upstream API is not configured", 400);
+    }
+
+    const user = await store.getUserById(current.user.id);
+    if (!user || user.status !== "active") throw httpError("Account is not active", 403);
+
+    const costPerImage = Math.max(0, Number(settings.generationCreditCost ?? 1) || 0);
+    const auditId = randomId("pgr_");
+
+    await store.insertGenerationRequest({
+      id: auditId,
+      userId: user.id,
+      prompt: "(playground responses)",
+      ipAddress: getClientIp(req),
+      userAgent: getUserAgent(req),
+      isPublic: false,
+      status: "pending"
+    });
+
+    let reservedCredits = false;
+    if (costPerImage > 0) {
+      reservedCredits = await store.reserveCredits(user.id, costPerImage, {
+        type: "consume_generate",
+        refType: "generation_request",
+        refId: auditId,
+        note: "Playground responses API"
+      });
+      if (!reservedCredits) {
+        await store.updateGenerationRequest(auditId, { status: "failed", errorMessage: "Not enough credits" });
+        throw httpError("Not enough credits", 402);
+      }
+    }
+
+    try {
+      const rawBody = await readRawBody(req);
+      const endpoint = joinUpstreamPath(cfg.baseUrl, "responses");
+      const upstreamRes = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cfg.apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: rawBody
+      });
+
+      const upstreamText = await upstreamRes.text();
+      if (!upstreamRes.ok) {
+        let msg;
+        try { msg = JSON.parse(upstreamText)?.error?.message || "Upstream responses API failed"; } catch { msg = "Upstream responses API failed"; }
+        throw httpError(String(msg), upstreamRes.status);
+      }
+
+      await store.updateGenerationRequest(auditId, { status: "success" });
+      reservedCredits = false;
+
+      res.writeHead(upstreamRes.status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(upstreamText);
+    } catch (error) {
+      if (reservedCredits) {
+        await store.addCredits(user.id, costPerImage, {
+          type: "refund_failure",
+          refType: "generation_request",
+          refId: auditId,
+          note: "Refund: playground responses failed"
+        }).catch((e) => console.error(e));
+      }
+      await store.updateGenerationRequest(auditId, {
+        status: "failed",
+        errorMessage: String(error.message || error).slice(0, 2000)
+      }).catch((e) => console.error(e));
+      throw error;
+    }
+    return;
+  }
+
+  // GET /api-proxy/v1/models — return the configured model
+  if (req.method === "GET" && (suffix === "v1/models" || suffix === "models")) {
+    const settings = await store.getSettings();
+    const cfg = getUpstreamConfig(settings);
+    const model = cfg.model || DEFAULT_MODEL;
+    return sendJson(res, 200, {
+      object: "list",
+      data: [{ id: model, object: "model", owned_by: "system" }]
+    });
+  }
+
+  sendError(res, 404, "Proxy route not found");
+}
+
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   try {
+    if (url.pathname.startsWith("/api-proxy/")) {
+      await routeApiProxy(req, res, url);
+      return;
+    }
     if (url.pathname.startsWith("/api/")) {
       await routeApi(req, res, url);
       return;

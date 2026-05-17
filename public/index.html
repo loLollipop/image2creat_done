@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/remixicon@4.6.0/fonts/remixicon.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="./styles.css?v=20260515a">
   </head>
   <body>
     <div id="app" class="app">
@@ -123,19 +123,23 @@
         <section class="workspace-shell">
           <aside class="workspace-sidebar">
             <div class="workspace-sidebar-header">
-              <div>
-                <span class="workspace-sidebar-kicker">Workspace</span>
-                <strong>创作会话</strong>
-              </div>
-              <button id="workspaceNewBtn" class="workspace-new-btn" type="button"><i class="ri-add-line"></i> 新建</button>
+              <button id="workspaceNewBtn" class="workspace-new-btn" type="button"><i class="ri-add-line"></i> <span data-i18n="newChat">新聊天</span></button>
             </div>
             <div id="workspaceConvList" class="workspace-conv-list"></div>
+            <div class="workspace-sidebar-footer">
+              <div class="sidebar-user-info">
+                <i class="ri-user-3-line"></i>
+                <span id="sidebarUserName"></span>
+              </div>
+            </div>
           </aside>
           <section class="workspace-main">
             <div id="workspaceThread" class="workspace-thread">
               <div id="generationStatus" class="generation-status hidden">
-                <div class="paint-drip" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
-                <span id="funMessage">Generating...</span>
+                <div class="thinking-indicator">
+                  <div class="thinking-dot-group"><span></span><span></span><span></span></div>
+                  <span id="funMessage">思考中...</span>
+                </div>
               </div>
               <div id="historyList" class="history-list"></div>
               <div class="bottom-spacer"></div>
@@ -163,27 +167,19 @@
 
       <template id="composerTemplate">
         <form class="composer">
-          <div class="composer-head">
-            <button class="model-chip options-toggle" type="button">
-              <span class="model-label">gpt-image-2</span>
-            </button>
-            <label class="square-toggle">
-              <span data-i18n="publishToSquare">公开到广场</span>
-              <input class="public-input" type="checkbox">
-              <span class="toggle-track" aria-hidden="true"></span>
-            </label>
-          </div>
           <div class="reference-row hidden"></div>
           <div class="composer-bar">
             <label class="add-reference-button" title="Reference image">
               <i class="ri-add-line"></i>
               <input class="reference-input" type="file" accept="image/*">
             </label>
-            <textarea class="prompt-box" rows="1" placeholder="描述你想创作的图片..."></textarea>
-            <div class="composer-spacer"></div>
-            <button class="send-button" type="submit">
-              <span data-i18n="create">生成</span>
-            </button>
+            <textarea class="prompt-box" rows="1" placeholder="有问题，尽管问"></textarea>
+            <div class="composer-right-controls">
+              <button class="options-toggle-btn options-toggle" type="button" title="参数设置"><i class="ri-settings-3-line"></i></button>
+              <button class="send-button" type="submit" title="发送">
+                <i class="ri-arrow-up-line"></i>
+              </button>
+            </div>
           </div>
           <div class="advanced-options hidden">
             <label>
@@ -224,10 +220,66 @@
         </form>
       </template>
 
+      <template id="turnTemplate">
+        <article class="turn-card" data-turn-id="">
+          <div class="chat-msg chat-msg-user">
+            <div class="chat-msg-content">
+              <div class="turn-references hidden"></div>
+              <p class="turn-prompt-text"></p>
+            </div>
+          </div>
+          <div class="chat-msg chat-msg-ai">
+            <div class="chat-msg-avatar"><i class="ri-sparkling-2-fill"></i></div>
+            <div class="chat-msg-content">
+              <div class="turn-status hidden"></div>
+              <div class="turn-error hidden"></div>
+              <div class="turn-grid"></div>
+              <div class="chat-msg-actions">
+                <button type="button" class="chat-action-btn turn-reuse" title="复用配置"><i class="ri-file-copy-line"></i></button>
+                <button type="button" class="chat-action-btn turn-regenerate" title="重新生成"><i class="ri-refresh-line"></i></button>
+                <button type="button" class="chat-action-btn turn-delete" title="删除"><i class="ri-delete-bin-line"></i></button>
+              </div>
+              <div class="turn-meta">
+                <span class="turn-meta-chip turn-size"></span>
+                <span class="turn-meta-chip turn-model"></span>
+                <span class="turn-meta-chip turn-time"></span>
+              </div>
+            </div>
+          </div>
+        </article>
+      </template>
+
+      <template id="turnImageTemplate">
+        <figure class="turn-image" data-image-id="" data-status="loading">
+          <div class="turn-image-frame">
+            <div class="turn-image-skeleton">
+              <div class="turn-image-spinner"></div>
+              <span class="turn-image-status-text" data-i18n="generating">生成中...</span>
+            </div>
+            <img class="turn-image-pic hidden" alt="">
+            <div class="turn-image-error hidden">
+              <i class="ri-error-warning-line"></i>
+              <span class="turn-image-error-text"></span>
+            </div>
+            <div class="turn-image-actions">
+              <button type="button" class="turn-image-action" data-action="download" title="下载">
+                <i class="ri-download-line"></i>
+              </button>
+              <button type="button" class="turn-image-action" data-action="continue-edit" title="继续编辑">
+                <i class="ri-edit-2-line"></i>
+              </button>
+              <button type="button" class="turn-image-action" data-action="lightbox" title="查看大图">
+                <i class="ri-fullscreen-line"></i>
+              </button>
+            </div>
+          </div>
+        </figure>
+      </template>
+
       <div id="modalLayer" class="modal-layer hidden"></div>
       <div id="toastLayer" class="toast-layer"></div>
     </div>
 
-    <script src="/app.js" defer></script>
+    <script src="./app.js?v=20260515a" defer></script>
   </body>
 </html>

@@ -83,4 +83,4 @@ async function adminRequest(method, path, body = null, { timeoutMs = 60000, quer
   });
 }
 
-module.exports = { adminRequest, isConfigured };
+module.exports = { adminRequest, isConfigured, buildAdminUrl, getConfig };

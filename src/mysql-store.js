@@ -131,6 +131,7 @@ function mapGeneration(row) {
     conversationId: row.conversation_id || null,
     operationType: row.operation_type || "generate",
     sourceGenerationId: row.source_generation_id || null,
+    requestId: row.request_id || null,
     prompt: row.prompt,
     model: row.model,
     size: row.size,
@@ -287,6 +288,7 @@ async function runMigrations() {
       conversation_id VARCHAR(32) NULL,
       operation_type VARCHAR(16) NOT NULL DEFAULT 'generate',
       source_generation_id VARCHAR(32) NULL,
+      request_id VARCHAR(32) NULL,
       prompt TEXT NOT NULL,
       model VARCHAR(80) NOT NULL,
       size VARCHAR(20) NOT NULL,
@@ -303,6 +305,7 @@ async function runMigrations() {
       INDEX idx_generations_created_at (created_at),
       INDEX idx_generations_conversation (conversation_id),
       INDEX idx_generations_source (source_generation_id),
+      INDEX idx_generations_request (request_id),
       CONSTRAINT fk_generations_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
@@ -427,6 +430,14 @@ async function runMigrations() {
   if (!genSourceCol.length) {
     await db.query("ALTER TABLE generations ADD COLUMN source_generation_id VARCHAR(32) NULL AFTER operation_type");
     await db.query("ALTER TABLE generations ADD INDEX idx_generations_source (source_generation_id)");
+  }
+
+  // Link each generation row back to its originating generation_request so the
+  // frontend workbench can group N images from the same request into one "turn".
+  const [genRequestCol] = await db.execute("SHOW COLUMNS FROM generations LIKE 'request_id'");
+  if (!genRequestCol.length) {
+    await db.query("ALTER TABLE generations ADD COLUMN request_id VARCHAR(32) NULL AFTER source_generation_id");
+    await db.query("ALTER TABLE generations ADD INDEX idx_generations_request (request_id)");
   }
 
   await db.query(`
@@ -942,14 +953,15 @@ async function insertGenerations(generations) {
     for (const generation of generations) {
       await connection.execute(
         `INSERT INTO generations
-          (id, user_id, conversation_id, operation_type, source_generation_id, prompt, model, size, quality, background, output_format, filename, is_public, revised_prompt, usage_json, upstream_used, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, user_id, conversation_id, operation_type, source_generation_id, request_id, prompt, model, size, quality, background, output_format, filename, is_public, revised_prompt, usage_json, upstream_used, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           generation.id,
           generation.userId,
           generation.conversationId || null,
           generation.operationType || "generate",
           generation.sourceGenerationId || null,
+          generation.requestId || null,
           generation.prompt,
           generation.model,
           generation.size,
@@ -1059,6 +1071,17 @@ async function getGenerationById(id) {
   return mapGeneration(rows[0]);
 }
 
+async function setGenerationPublic(id, isPublic) {
+  await getPool().execute(
+    "UPDATE generations SET is_public = ? WHERE id = ?",
+    [isPublic ? 1 : 0, id]
+  );
+}
+
+async function deleteGeneration(id) {
+  await getPool().execute("DELETE FROM generations WHERE id = ?", [id]);
+}
+
 async function countTodayGenerations() {
   const [rows] = await getPool().execute(
     "SELECT COUNT(*) AS count FROM generations WHERE created_at >= CURDATE() AND created_at < DATE_ADD(CURDATE(), INTERVAL 1 DAY)"
@@ -1133,6 +1156,53 @@ async function listGenerationsForConversation(conversationId, limit = 100) {
     [conversationId]
   );
   return rows.map(mapGeneration);
+}
+
+// Group a conversation's generations into "turns" (one turn = all images from
+// the same generation_request). Old rows without a request_id are treated as
+// single-image turns. Returned in chronological ascending order, matching the
+// chat-style workbench layout used in chatgpt2api/web/src/app/image/page.tsx.
+async function listConversationTurns(conversationId, limit = 200) {
+  const normalizedLimit = Math.max(1, Math.min(500, Number(limit) || 200));
+  const [rows] = await getPool().execute(
+    `SELECT * FROM generations WHERE conversation_id = ? ORDER BY created_at ASC LIMIT ${normalizedLimit}`,
+    [conversationId]
+  );
+  const turns = [];
+  const byRequest = new Map();
+  for (const row of rows) {
+    const generation = mapGeneration(row);
+    const key = generation.requestId || `solo_${generation.id}`;
+    let turn = byRequest.get(key);
+    if (!turn) {
+      turn = {
+        id: key,
+        requestId: generation.requestId || null,
+        prompt: generation.prompt,
+        operationType: generation.operationType || "generate",
+        sourceGenerationId: generation.sourceGenerationId || null,
+        model: generation.model,
+        size: generation.size,
+        quality: generation.quality,
+        background: generation.background,
+        outputFormat: generation.outputFormat,
+        createdAt: generation.createdAt,
+        isPublic: generation.isPublic,
+        revisedPrompt: generation.revisedPrompt || "",
+        images: []
+      };
+      byRequest.set(key, turn);
+      turns.push(turn);
+    }
+    turn.images.push({
+      id: generation.id,
+      filename: generation.filename,
+      revisedPrompt: generation.revisedPrompt || "",
+      createdAt: generation.createdAt,
+      isPublic: generation.isPublic
+    });
+  }
+  return turns;
 }
 
 // ----------------------------------------------------------------------------
@@ -1534,6 +1604,8 @@ module.exports = {
   listGenerationsForUser,
   listPublicGenerations,
   getGenerationById,
+  setGenerationPublic,
+  deleteGeneration,
   countTodayGenerations,
   createConversation,
   listConversations,
@@ -1542,6 +1614,7 @@ module.exports = {
   deleteConversation,
   touchConversation,
   listGenerationsForConversation,
+  listConversationTurns,
   listCreditTransactionsForUser,
   listAllCreditTransactions,
   createRedeemCodes,
