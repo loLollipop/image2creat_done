@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GPT Image Studio</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/remixicon@4.6.0/fonts/remixicon.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="./styles.css?v=20260515a">
+    <link rel="stylesheet" href="./styles.css?v=20260527a">
   </head>
   <body>
     <div id="app" class="app">
@@ -24,59 +24,84 @@
 
       <div class="ambient" aria-hidden="true"></div>
 
+      <!-- ===== Top Navigation (chatgpt2api style) ===== -->
       <header class="topbar">
-        <button id="brandBtn" class="brand-btn" type="button">
-          <span class="brand-dot"><i class="ri-sparkling-2-fill"></i></span>
-          <span data-i18n="brand">Image Studio</span>
-        </button>
-        <nav class="top-actions" aria-label="主导航">
-          <button id="promptLibraryBtn" class="nav-pill" type="button">
-            <span class="sparkle-icon" aria-hidden="true">✨</span>
-            <span data-i18n="promptLibrary">提示词库</span>
-          </button>
-          <button id="langBtn" class="icon-pill" type="button" title="Language">中/EN</button>
-          <button id="loginBtn" class="dark-pill" type="button">
-            <i class="ri-login-circle-line"></i>
-            <span data-i18n="login">登录</span>
-          </button>
-          <div id="userMenuWrap" class="user-menu hidden">
-            <button id="userMenuButton" class="avatar-button" type="button" aria-haspopup="menu" aria-expanded="false">
-              <span id="userMenuAvatar" class="avatar-face" aria-hidden="true"></span>
+        <div class="topbar-inner">
+          <div class="topbar-left">
+            <button id="brandBtn" class="brand-btn" type="button">
+              <span class="brand-dot"><i class="ri-sparkling-2-fill"></i></span>
+              <span data-i18n="brand">Image Studio</span>
+              <i id="navCollapseIcon" class="ri-arrow-up-s-line nav-collapse-icon"></i>
             </button>
-            <div id="userMenuPanel" class="user-dropdown hidden" role="menu">
-              <div class="user-dropdown-summary">
-                <div id="userMenuSummaryAvatar" class="avatar-face avatar-face-lg" aria-hidden="true"></div>
-                <div class="user-summary-text">
-                  <strong id="userMenuName"></strong>
-                  <span id="userMenuEmail"></span>
-                  <span id="userMenuId"></span>
+          </div>
+          <nav id="primaryNav" class="primary-nav" aria-label="主导航">
+            <button class="nav-pill" data-route="image" type="button">创作台</button>
+            <button id="promptLibraryBtn" class="nav-pill" data-route="library" type="button">提示词库</button>
+            <button class="nav-pill admin-only" data-route="accounts" type="button">号池管理</button>
+            <button class="nav-pill admin-only" data-route="register" type="button">注册机</button>
+            <button class="nav-pill admin-only" data-route="users" type="button">用户管理</button>
+            <button class="nav-pill admin-only" data-route="logs" type="button">日志管理</button>
+            <button class="nav-pill admin-only" data-route="settings" type="button">设置</button>
+          </nav>
+          <div class="topbar-right">
+            <button id="langBtn" class="icon-pill" type="button" title="Language">中/EN</button>
+            <button id="loginBtn" class="dark-pill" type="button">
+              <i class="ri-login-circle-line"></i>
+              <span data-i18n="login">登录</span>
+            </button>
+            <div id="userMenuWrap" class="user-menu hidden">
+              <button id="userMenuButton" class="avatar-button" type="button" aria-haspopup="menu" aria-expanded="false">
+                <span id="userMenuAvatar" class="avatar-face" aria-hidden="true"></span>
+                <span id="userMenuDisplayName" class="avatar-display-name"></span>
+                <i class="ri-arrow-down-s-line"></i>
+              </button>
+              <div id="userMenuPanel" class="user-dropdown hidden" role="menu">
+                <div class="user-dropdown-summary">
+                  <div id="userMenuSummaryAvatar" class="avatar-face avatar-face-lg" aria-hidden="true"></div>
+                  <div class="user-summary-text">
+                    <strong id="userMenuName"></strong>
+                    <span id="userMenuEmail"></span>
+                    <span id="userMenuId"></span>
+                  </div>
                 </div>
-              </div>
-              <button id="profileBtn" class="user-menu-item" type="button">
-                <i class="ri-user-settings-line"></i>
-                <span data-i18n="profile">个人信息</span>
-              </button>
-              <button id="userCreditsBtn" class="user-menu-item user-menu-item-split" type="button">
-                <span class="user-menu-item-leading">
+                <div class="user-dropdown-stats">
+                  <div class="user-stat-chip">
+                    <div class="user-stat-label">角色</div>
+                    <div id="userMenuRole" class="user-stat-value">--</div>
+                  </div>
+                  <div class="user-stat-chip">
+                    <div class="user-stat-label">积分</div>
+                    <div id="userMenuCredits" class="user-stat-value">0</div>
+                  </div>
+                  <div class="user-stat-chip">
+                    <div class="user-stat-label">版本</div>
+                    <div class="user-stat-value">v1.0</div>
+                  </div>
+                </div>
+                <button id="profileBtn" class="user-menu-item" type="button">
+                  <i class="ri-user-settings-line"></i>
+                  <span data-i18n="profile">个人中心</span>
+                </button>
+                <button id="userCreditsBtn" class="user-menu-item" type="button">
                   <i class="ri-coin-line"></i>
-                  <span data-i18n="credits">积分</span>
-                </span>
-                <strong id="userMenuCredits">0</strong>
-              </button>
-              <button id="userWorksBtn" class="user-menu-item" type="button">
-                <i class="ri-gallery-view-2"></i>
-                <span data-i18n="myWorks">我的作品</span>
-              </button>
-              <button id="userLogoutBtn" class="user-menu-item" type="button">
-                <i class="ri-logout-circle-r-line"></i>
-                <span data-i18n="logout">退出</span>
-              </button>
+                  <span data-i18n="credits">积分记录</span>
+                </button>
+                <button id="userWorksBtn" class="user-menu-item" type="button">
+                  <i class="ri-gallery-view-2"></i>
+                  <span data-i18n="myWorks">我的作品</span>
+                </button>
+                <button id="userLogoutBtn" class="user-menu-item user-menu-item-danger" type="button">
+                  <i class="ri-logout-circle-r-line"></i>
+                  <span data-i18n="logout">退出登录</span>
+                </button>
+              </div>
             </div>
           </div>
-        </nav>
+        </div>
       </header>
 
-      <main id="homeView" class="home-view">
+      <!-- ===== Page: Landing ===== -->
+      <main id="homeView" class="page-view home-view">
         <section class="hero">
           <div class="hero-video-layer" aria-hidden="true">
             <video autoplay muted loop playsinline preload="metadata">
@@ -119,7 +144,8 @@
         </section>
       </main>
 
-      <main id="chatView" class="chat-view hidden">
+      <!-- ===== Page: Image Workspace (创作台) ===== -->
+      <main id="chatView" class="page-view chat-view hidden">
         <section class="workspace-shell">
           <aside class="workspace-sidebar">
             <div class="workspace-sidebar-header">
@@ -149,7 +175,8 @@
         </section>
       </main>
 
-      <main id="libraryView" class="library-view hidden">
+      <!-- ===== Page: Prompt Library (提示词库) ===== -->
+      <main id="libraryView" class="page-view library-view hidden">
         <section class="library-hero">
           <span class="library-badge"><span class="sparkle-icon" aria-hidden="true">✨</span><span data-i18n="libraryBadge">精选提示词库</span></span>
           <h1 data-i18n="libraryTitle">发现无尽创意</h1>
@@ -165,6 +192,286 @@
         <section id="promptGrid" class="prompt-grid"></section>
       </main>
 
+      <!-- ===== Page: Accounts / 号池管理 ===== -->
+      <main id="accountsView" class="page-view admin-page hidden">
+        <div class="admin-page-inner">
+          <section class="page-header">
+            <div class="page-header-text">
+              <div class="page-header-eyebrow">Upstream Accounts</div>
+              <h1 class="page-header-title">号池管理</h1>
+            </div>
+            <div class="page-header-actions">
+              <button id="accountsRefreshBtn" class="btn btn-outline btn-sm" type="button"><i class="ri-refresh-line"></i> 刷新</button>
+              <button id="accountsAddBtn" class="btn btn-primary btn-sm" type="button"><i class="ri-add-line"></i> 添加账户</button>
+            </div>
+          </section>
+          <div id="accountsMetrics" class="metrics-grid"></div>
+          <div class="card">
+            <div class="card-content">
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>邮箱</th>
+                      <th>类型</th>
+                      <th>状态</th>
+                      <th>额度</th>
+                      <th>更新时间</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="accountsBody"></tbody>
+                </table>
+              </div>
+              <div id="accountsEmpty" class="table-empty hidden">暂无账户数据</div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- ===== Page: Register / 注册机 ===== -->
+      <main id="registerView" class="page-view admin-page hidden">
+        <div class="admin-page-inner">
+          <section class="page-header">
+            <div class="page-header-text">
+              <div class="page-header-eyebrow">Register</div>
+              <h1 class="page-header-title">注册机</h1>
+            </div>
+            <div class="page-header-actions">
+              <button id="registerRefreshBtn" class="btn btn-outline btn-sm" type="button"><i class="ri-refresh-line"></i> 刷新</button>
+            </div>
+          </section>
+          <div id="registerContent" class="settings-masonry"></div>
+        </div>
+      </main>
+
+      <!-- ===== Page: Users / 用户管理 ===== -->
+      <main id="usersView" class="page-view admin-page hidden">
+        <div class="admin-page-inner">
+          <section class="page-header">
+            <div class="page-header-text">
+              <div class="page-header-eyebrow">Users</div>
+              <h1 class="page-header-title">用户管理</h1>
+            </div>
+            <div class="page-header-actions">
+              <button id="usersRefreshBtn" class="btn btn-outline btn-sm" type="button"><i class="ri-refresh-line"></i> 刷新</button>
+            </div>
+          </section>
+          <div id="usersMetrics" class="metrics-grid"></div>
+          <div class="card">
+            <div class="card-content">
+              <div class="table-toolbar">
+                <div class="search-input-wrap">
+                  <i class="ri-search-line"></i>
+                  <input id="usersSearchInput" type="text" placeholder="搜索用户名或邮箱..." class="search-input">
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>用户</th>
+                      <th>角色</th>
+                      <th>状态</th>
+                      <th>积分</th>
+                      <th>调整</th>
+                      <th>注册时间</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="usersBody"></tbody>
+                </table>
+              </div>
+              <div id="usersEmpty" class="table-empty hidden">暂无用户数据</div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- ===== Page: Logs / 日志管理 ===== -->
+      <main id="logsView" class="page-view admin-page hidden">
+        <div class="admin-page-inner">
+          <section class="page-header">
+            <div class="page-header-text">
+              <div class="page-header-eyebrow">Logs</div>
+              <h1 class="page-header-title">日志管理</h1>
+            </div>
+            <div class="page-header-actions">
+              <button id="logsRefreshBtn" class="btn btn-outline btn-sm" type="button"><i class="ri-refresh-line"></i> 刷新</button>
+              <button id="logsDeleteBtn" class="btn btn-danger btn-sm" type="button"><i class="ri-delete-bin-line"></i> 清除</button>
+            </div>
+          </section>
+          <div class="card">
+            <div class="card-content">
+              <div class="table-toolbar">
+                <div class="search-input-wrap">
+                  <i class="ri-search-line"></i>
+                  <input id="logsSearchInput" type="text" placeholder="搜索日志..." class="search-input">
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>模型</th>
+                      <th>账户</th>
+                      <th>状态</th>
+                      <th>耗时</th>
+                      <th>详情</th>
+                    </tr>
+                  </thead>
+                  <tbody id="logsBody"></tbody>
+                </table>
+              </div>
+              <div id="logsEmpty" class="table-empty hidden">暂无日志数据</div>
+              <div id="logsPagination" class="pagination"></div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- ===== Page: Settings / 设置 ===== -->
+      <main id="settingsView" class="page-view admin-page hidden">
+        <div class="admin-page-inner">
+          <section class="page-header">
+            <div class="page-header-text">
+              <div class="page-header-eyebrow">Settings</div>
+              <h1 class="page-header-title">系统设置</h1>
+            </div>
+          </section>
+          <section class="settings-masonry">
+            <!-- API Configuration Card -->
+            <div class="masonry-item">
+              <div class="card">
+                <div class="card-header">
+                  <h3><i class="ri-key-2-line"></i> 接口配置</h3>
+                </div>
+                <div class="card-content">
+                  <form id="settingsApiForm" class="settings-form">
+                    <label class="field">
+                      <span class="field-label">API Key</span>
+                      <input id="apiKeyInput" type="password" placeholder="sk-..." class="field-input">
+                      <span id="apiKeyMask" class="field-hint"></span>
+                    </label>
+                    <label class="field">
+                      <span class="field-label">API Base URL</span>
+                      <input id="apiBaseUrlInput" type="text" placeholder="https://api.openai.com/v1" class="field-input">
+                    </label>
+                    <label class="field">
+                      <span class="field-label">模型</span>
+                      <input id="modelInput" type="text" placeholder="gpt-image-2" class="field-input">
+                    </label>
+                    <div class="field-row">
+                      <button class="btn btn-primary" type="submit">保存配置</button>
+                      <button id="clearApiKeyBtn" class="btn btn-outline" type="button">清除 Key</button>
+                      <button id="testApiBtn" class="btn btn-outline" type="button"><i class="ri-play-line"></i> 测试连接</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+
+            <!-- Registration & Credits Card -->
+            <div class="masonry-item">
+              <div class="card">
+                <div class="card-header">
+                  <h3><i class="ri-shield-user-line"></i> 注册与积分</h3>
+                </div>
+                <div class="card-content">
+                  <form id="settingsCreditsForm" class="settings-form">
+                    <label class="field">
+                      <span class="field-label">默认积分</span>
+                      <input id="defaultCreditsInput" type="number" min="0" class="field-input">
+                    </label>
+                    <label class="field">
+                      <span class="field-label">生成消耗</span>
+                      <input id="generationCreditCostInput" type="number" min="0" class="field-input">
+                    </label>
+                    <label class="field">
+                      <span class="field-label">最大图片数</span>
+                      <input id="maxImagesInput" type="number" min="1" max="4" class="field-input">
+                    </label>
+                    <div class="field-switches">
+                      <label class="switch-field">
+                        <input id="allowRegistrationInput" type="checkbox">
+                        <span>允许注册</span>
+                      </label>
+                      <label class="switch-field">
+                        <input id="requireApprovalInput" type="checkbox">
+                        <span>需要审核</span>
+                      </label>
+                    </div>
+                    <div class="field-row">
+                      <button class="btn btn-primary" type="submit">保存</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+
+            <!-- Upstream Settings Card -->
+            <div class="masonry-item">
+              <div class="card">
+                <div class="card-header">
+                  <h3><i class="ri-cloud-line"></i> 上游设置</h3>
+                </div>
+                <div class="card-content">
+                  <form id="settingsUpstreamForm" class="settings-form">
+                    <div id="upstreamSettingsContent"></div>
+                    <div class="field-row">
+                      <button class="btn btn-primary" type="submit">保存</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+
+            <!-- Backup Card -->
+            <div class="masonry-item">
+              <div class="card">
+                <div class="card-header">
+                  <h3><i class="ri-database-2-line"></i> 备份管理</h3>
+                </div>
+                <div class="card-content">
+                  <div id="backupContent"></div>
+                  <div class="field-row">
+                    <button id="backupRunBtn" class="btn btn-primary" type="button"><i class="ri-play-line"></i> 立即备份</button>
+                    <button id="backupTestBtn" class="btn btn-outline" type="button"><i class="ri-test-tube-line"></i> 测试</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Redeem Codes Card -->
+            <div class="masonry-item">
+              <div class="card">
+                <div class="card-header">
+                  <h3><i class="ri-coupon-3-line"></i> 兑换码管理</h3>
+                </div>
+                <div class="card-content">
+                  <form id="redeemCodeForm" class="settings-form">
+                    <label class="field">
+                      <span class="field-label">积分数量</span>
+                      <input id="redeemCreditsInput" type="number" min="1" value="10" class="field-input">
+                    </label>
+                    <label class="field">
+                      <span class="field-label">生成数量</span>
+                      <input id="redeemCountInput" type="number" min="1" max="50" value="1" class="field-input">
+                    </label>
+                    <div class="field-row">
+                      <button class="btn btn-primary" type="submit"><i class="ri-add-line"></i> 生成兑换码</button>
+                    </div>
+                  </form>
+                  <div id="redeemCodesList" class="redeem-codes-list"></div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      <!-- ===== Templates ===== -->
       <template id="composerTemplate">
         <form class="composer">
           <div class="reference-row hidden"></div>
@@ -173,7 +480,7 @@
               <i class="ri-add-line"></i>
               <input class="reference-input" type="file" accept="image/*">
             </label>
-            <textarea class="prompt-box" rows="1" placeholder="有问题，尽管问"></textarea>
+            <textarea class="prompt-box" rows="1" placeholder="描述你想创作的图片..."></textarea>
             <div class="composer-right-controls">
               <button class="options-toggle-btn options-toggle" type="button" title="参数设置"><i class="ri-settings-3-line"></i></button>
               <button class="send-button" type="submit" title="发送">
@@ -280,6 +587,6 @@
       <div id="toastLayer" class="toast-layer"></div>
     </div>
 
-    <script src="./app.js?v=20260515a" defer></script>
+    <script src="./app.js?v=20260527a" defer></script>
   </body>
 </html>

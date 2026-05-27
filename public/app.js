@@ -466,6 +466,11 @@ const elements = {
   homeView: $("#homeView"),
   chatView: $("#chatView"),
   libraryView: $("#libraryView"),
+  accountsView: $("#accountsView"),
+  registerView: $("#registerView"),
+  usersView: $("#usersView"),
+  logsView: $("#logsView"),
+  settingsView: $("#settingsView"),
   modalLayer: $("#modalLayer"),
   toastLayer: $("#toastLayer"),
   brandBtn: $("#brandBtn"),
@@ -473,14 +478,18 @@ const elements = {
   promptLibraryBtn: $("#promptLibraryBtn"),
   langBtn: $("#langBtn"),
   loginBtn: $("#loginBtn"),
+  primaryNav: $("#primaryNav"),
+  navCollapseIcon: $("#navCollapseIcon"),
   userMenuWrap: $("#userMenuWrap"),
   userMenuButton: $("#userMenuButton"),
   userMenuPanel: $("#userMenuPanel"),
   userMenuAvatar: $("#userMenuAvatar"),
+  userMenuDisplayName: $("#userMenuDisplayName"),
   userMenuSummaryAvatar: $("#userMenuSummaryAvatar"),
   userMenuName: $("#userMenuName"),
   userMenuEmail: $("#userMenuEmail"),
   userMenuId: $("#userMenuId"),
+  userMenuRole: $("#userMenuRole"),
   userMenuCredits: $("#userMenuCredits"),
   profileBtn: $("#profileBtn"),
   userCreditsBtn: $("#userCreditsBtn"),
@@ -504,6 +513,28 @@ const elements = {
   composerTemplate: $("#composerTemplate"),
   turnTemplate: $("#turnTemplate"),
   turnImageTemplate: $("#turnImageTemplate")
+};
+
+const ADMIN_VIEWS = ["accounts", "register", "users", "logs", "settings"];
+const ALL_VIEWS = ["landing", "workspace", "library", ...ADMIN_VIEWS];
+const VIEW_ELEMENT_MAP = {
+  landing: "homeView",
+  workspace: "chatView",
+  library: "libraryView",
+  accounts: "accountsView",
+  register: "registerView",
+  users: "usersView",
+  logs: "logsView",
+  settings: "settingsView"
+};
+const ROUTE_TO_VIEW = {
+  image: "workspace",
+  library: "library",
+  accounts: "accounts",
+  register: "register",
+  users: "users",
+  logs: "logs",
+  settings: "settings"
 };
 
 let heroVideoWatchdog = null;
@@ -625,19 +656,30 @@ function toggleUserMenu(forceOpen) {
 
 function updateNav() {
   const loggedIn = Boolean(state.user);
+  const isAdmin = state.user?.role === "admin";
   elements.loginBtn.classList.toggle("hidden", loggedIn);
   elements.userMenuWrap?.classList.toggle("hidden", !loggedIn);
+  elements.app.classList.toggle("is-admin", isAdmin);
   if (loggedIn) {
     const displayName = getDisplayName();
     if (elements.userMenuAvatar) elements.userMenuAvatar.innerHTML = getAvatarMarkup();
     if (elements.userMenuSummaryAvatar) elements.userMenuSummaryAvatar.innerHTML = getAvatarMarkup();
+    if (elements.userMenuDisplayName) elements.userMenuDisplayName.textContent = displayName;
     if (elements.userMenuName) elements.userMenuName.textContent = displayName;
     if (elements.userMenuEmail) elements.userMenuEmail.textContent = state.user.email || "";
     if (elements.userMenuId) elements.userMenuId.textContent = `${text("userId")}: ${state.user.id}`;
+    if (elements.userMenuRole) elements.userMenuRole.textContent = isAdmin ? "管理员" : "普通用户";
     if (elements.userMenuCredits) elements.userMenuCredits.textContent = String(state.user.credits ?? 0);
   } else {
     closeUserMenu();
   }
+
+  // Update active nav pill
+  $$(".nav-pill[data-route]", elements.primaryNav).forEach((pill) => {
+    const route = pill.dataset.route;
+    const pillView = ROUTE_TO_VIEW[route];
+    pill.classList.toggle("active", pillView === state.view);
+  });
 
   const hasApiKey = state.settings?.hasApiKey;
   elements.apiStatus.textContent = hasApiKey === true
@@ -650,11 +692,13 @@ function updateNav() {
 
 function setView(view) {
   state.view = view;
-  elements.homeView.classList.toggle("hidden", view !== "landing");
-  elements.chatView.classList.toggle("hidden", view !== "workspace");
-  elements.libraryView.classList.toggle("hidden", view !== "library");
+  for (const [v, elName] of Object.entries(VIEW_ELEMENT_MAP)) {
+    const el = elements[elName];
+    if (el) el.classList.toggle("hidden", view !== v);
+  }
   if (view === "library") renderLibrary();
   if (view === "landing") requestAnimationFrame(playHeroVideo);
+  if (ADMIN_VIEWS.includes(view)) loadAdminPage(view);
   updateNav();
 }
 
@@ -2385,153 +2429,10 @@ async function submitCheckin(event) {
   }
 }
 
+// Legacy admin modal - now redirects to settings page
 async function openAdminModal() {
   if (state.user?.role !== "admin") return;
-  openModal(`
-    <section class="modal admin-modal">
-      <button class="close-modal" type="button"><i class="ri-close-line"></i></button>
-      <div class="modal-title">
-        <i class="ri-settings-3-line"></i>
-        <h2>${text("adminTitle")}</h2>
-      </div>
-      <div class="admin-grid">
-        <div class="admin-card">
-          <h3>${text("settings")}</h3>
-          <form id="settingsForm" class="admin-form">
-        <label>${text("apiKey")}<input id="apiKeyInput" type="password" placeholder="Your API key"></label>
-        <label>${text("apiBaseUrl")}<input id="apiBaseUrlInput" placeholder="AI API base URL"></label>
-            <label>${text("model")}<input id="modelInput" placeholder="gpt-image-2"></label>
-            <label>${text("defaultCredits")}<input id="defaultCreditsInput" type="number" min="0"></label>
-            <label>${text("generationCost")}<input id="generationCreditCostInput" type="number" min="0"></label>
-            <label>${text("maxImages")}<input id="maxImagesInput" type="number" min="1" max="4"></label>
-            <label class="admin-switch"><input id="allowRegistrationInput" type="checkbox">${text("allowRegistration")}</label>
-            <label class="admin-switch"><input id="requireApprovalInput" type="checkbox">${text("requireApproval")}</label>
-            <button class="modal-primary" type="submit">${text("save")}</button>
-            <button id="clearApiKeyBtn" class="modal-secondary" type="button">${text("clearKey")}</button>
-            <p id="apiKeyMask" style="color:#8b94a1;font-size:12px;margin:0"></p>
-          </form>
-        </div>
-        <div class="admin-card">
-          <h3>${text("users")}</h3>
-          <div class="users-table-wrap">
-            <table class="users-table">
-              <thead>
-                <tr>
-                  <th>${text("user")}</th>
-                  <th>${text("role")}</th>
-                  <th>${text("status")}</th>
-                  <th>${text("credits")}</th>
-                  <th>+/-</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="usersBody"></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </section>
-  `);
-  await loadAdminSettings();
-  await loadUsers();
-}
-
-async function loadAdminSettings() {
-  const settings = await api("/api/admin/settings");
-  state.settings = settings;
-  $("#apiBaseUrlInput").value = settings.apiBaseUrl || "";
-  $("#modelInput").value = settings.model || "gpt-image-2";
-  $("#defaultCreditsInput").value = settings.defaultCredits ?? 10;
-  $("#generationCreditCostInput").value = settings.generationCreditCost ?? 1;
-  $("#maxImagesInput").value = settings.maxImagesPerRequest ?? 1;
-  $("#allowRegistrationInput").checked = Boolean(settings.allowRegistration);
-  $("#requireApprovalInput").checked = Boolean(settings.requireApproval);
-  $("#apiKeyMask").textContent = settings.apiKeyMask
-    ? `${text("currentKey")}: ${settings.apiKeyMask}`
-    : text("noKey");
-  $("#settingsForm").addEventListener("submit", saveSettings);
-  $("#clearApiKeyBtn").addEventListener("click", clearApiKey);
-}
-
-async function saveSettings(event) {
-  event.preventDefault();
-  const settings = await api("/api/admin/settings", {
-    method: "PATCH",
-    body: JSON.stringify({
-      openaiApiKey: $("#apiKeyInput").value.trim(),
-      apiBaseUrl: $("#apiBaseUrlInput").value.trim(),
-      model: $("#modelInput").value.trim(),
-      defaultCredits: Number($("#defaultCreditsInput").value || 0),
-      generationCreditCost: Number($("#generationCreditCostInput").value || 0),
-      maxImagesPerRequest: Number($("#maxImagesInput").value || 1),
-      allowRegistration: $("#allowRegistrationInput").checked,
-      requireApproval: $("#requireApprovalInput").checked
-    })
-  });
-  state.settings = settings;
-  $("#apiKeyInput").value = "";
-  $("#apiKeyMask").textContent = settings.apiKeyMask
-    ? `${text("currentKey")}: ${settings.apiKeyMask}`
-    : text("noKey");
-  showToast(state.lang === "zh" ? "已保存" : "Saved", "ri-checkbox-circle-line");
-  updateNav();
-  syncComposers();
-}
-
-async function clearApiKey() {
-  const settings = await api("/api/admin/settings", {
-    method: "PATCH",
-    body: JSON.stringify({ clearApiKey: true })
-  });
-  state.settings = settings;
-  $("#apiKeyMask").textContent = text("noKey");
-  showToast(state.lang === "zh" ? "已清除" : "Cleared", "ri-delete-bin-line");
-  updateNav();
-  syncComposers();
-}
-
-async function loadUsers() {
-  const data = await api("/api/admin/users");
-  const body = $("#usersBody");
-  body.innerHTML = data.users.map((user) => `
-    <tr data-user-id="${user.id}">
-      <td class="user-cell"><strong>${escapeHtml(user.name || user.email)}</strong><span>${escapeHtml(user.email)}</span></td>
-      <td>
-        <select class="role-input" ${user.id === state.user.id ? "disabled" : ""}>
-          <option value="user" ${user.role === "user" ? "selected" : ""}>${text("user")}</option>
-          <option value="admin" ${user.role === "admin" ? "selected" : ""}>${text("adminRole")}</option>
-        </select>
-      </td>
-      <td>
-        <select class="status-input" ${user.id === state.user.id ? "disabled" : ""}>
-          <option value="active" ${user.status === "active" ? "selected" : ""}>${text("active")}</option>
-          <option value="disabled" ${user.status === "disabled" ? "selected" : ""}>${text("disabled")}</option>
-        </select>
-      </td>
-      <td><input class="credits-input" type="number" min="0" value="${Number(user.credits || 0)}"></td>
-      <td><input class="credit-delta-input" type="number" step="1" value="0"></td>
-      <td><button class="tiny-button save-user" type="button"><i class="ri-save-line"></i>${text("save")}</button></td>
-    </tr>
-  `).join("");
-  $$(".save-user", body).forEach((button) => {
-    button.addEventListener("click", () => saveUser(button.closest("tr")));
-  });
-}
-
-async function saveUser(row) {
-  const id = row.dataset.userId;
-  const user = await api(`/api/admin/users/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      role: $(".role-input", row).value,
-      status: $(".status-input", row).value,
-      credits: Number($(".credits-input", row).value || 0),
-      creditDelta: Number($(".credit-delta-input", row).value || 0)
-    })
-  });
-  if (id === state.user.id) state.user = user.user;
-  showToast(state.lang === "zh" ? "用户已保存" : "User saved", "ri-save-line");
-  updateNav();
+  setView("settings");
 }
 
 async function bootstrap() {
@@ -2566,14 +2467,36 @@ async function bootstrap() {
 }
 
 function bindGlobalEvents() {
+  // Brand button: toggle nav collapsed or go to landing
+  let navCollapsed = false;
   elements.brandBtn.addEventListener("click", () => {
-    setView("landing");
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    restartHeroVideo();
+    if (ADMIN_VIEWS.includes(state.view) || state.view === "workspace" || state.view === "library") {
+      navCollapsed = !navCollapsed;
+      elements.primaryNav.classList.toggle("collapsed", navCollapsed);
+      elements.brandBtn.classList.toggle("nav-collapsed", navCollapsed);
+    } else {
+      setView("landing");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      restartHeroVideo();
+    }
   });
+
+  // Nav pill routing
+  $$(".nav-pill[data-route]", elements.primaryNav).forEach((pill) => {
+    pill.addEventListener("click", () => {
+      const route = pill.dataset.route;
+      const view = ROUTE_TO_VIEW[route];
+      if (view === "workspace") {
+        openWorkspace();
+      } else if (view) {
+        setView(view);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    });
+  });
+
   elements.startCreateBtn?.addEventListener("click", () => openWorkspace());
   elements.workspaceNewBtn?.addEventListener("click", startNewConversation);
-  elements.promptLibraryBtn.addEventListener("click", () => setView("library"));
   elements.openLibraryInlineBtn.addEventListener("click", () => setView("library"));
   elements.langBtn.addEventListener("click", () => {
     state.lang = state.lang === "zh" ? "en" : "zh";
@@ -2615,6 +2538,9 @@ function bindGlobalEvents() {
     state.promptVisible = 20;
     renderLibrary();
   });
+
+  // Admin page action buttons
+  bindAdminPageEvents();
 }
 
 bindGlobalEvents();
@@ -2776,3 +2702,601 @@ convSidebarBtn?.addEventListener("click", openConvSidebar);
 convSidebarClose?.addEventListener("click", closeConvSidebar);
 convOverlay?.addEventListener("click", closeConvSidebar);
 convNewBtn?.addEventListener("click", startNewConversation);
+
+
+// ===================== Admin Pages =====================
+
+const adminPageLoaded = {};
+let adminLogsPage = 1;
+let adminLogsTotalPages = 1;
+
+function loadAdminPage(view) {
+  if (state.user?.role !== "admin") return;
+  switch (view) {
+    case "accounts": loadAccountsPage(); break;
+    case "register": loadRegisterPage(); break;
+    case "users": loadUsersPage(); break;
+    case "logs": loadLogsPage(); break;
+    case "settings": loadSettingsPage(); break;
+  }
+}
+
+// --- Accounts / 号池管理 ---
+async function loadAccountsPage() {
+  const metricsEl = $("#accountsMetrics");
+  const bodyEl = $("#accountsBody");
+  const emptyEl = $("#accountsEmpty");
+  try {
+    const data = await api("/api/admin/upstream/accounts");
+    const accounts = data.accounts || data.items || [];
+    const active = accounts.filter((a) => a.status === "active" || a.alive).length;
+    const total = accounts.length;
+    metricsEl.innerHTML = `
+      <div class="metric-card"><div class="metric-card-label">总账户</div><div class="metric-card-value">${total}</div></div>
+      <div class="metric-card"><div class="metric-card-label">可用</div><div class="metric-card-value">${active}</div></div>
+      <div class="metric-card"><div class="metric-card-label">不可用</div><div class="metric-card-value">${total - active}</div></div>
+    `;
+    if (accounts.length === 0) {
+      bodyEl.innerHTML = "";
+      emptyEl.classList.remove("hidden");
+      return;
+    }
+    emptyEl.classList.add("hidden");
+    bodyEl.innerHTML = accounts.map((account) => {
+      const alive = account.status === "active" || account.alive;
+      return `<tr>
+        <td><div class="user-cell"><strong>${escapeHtml(account.email || account.username || "--")}</strong></div></td>
+        <td><span class="badge badge-blue">${escapeHtml(account.type || account.account_type || "standard")}</span></td>
+        <td><span class="badge ${alive ? "badge-green" : "badge-red"}"><span class="status-dot ${alive ? "active" : "error"}"></span>${alive ? "正常" : "异常"}</span></td>
+        <td>${account.quota != null ? escapeHtml(String(account.quota)) : "--"}</td>
+        <td>${account.updated_at ? formatDateTime(account.updated_at) : "--"}</td>
+        <td>
+          <button class="btn btn-ghost btn-xs account-delete-btn" data-email="${escapeHtml(account.email || account.username || "")}" type="button"><i class="ri-delete-bin-line"></i></button>
+        </td>
+      </tr>`;
+    }).join("");
+    $$(".account-delete-btn", bodyEl).forEach((btn) => {
+      btn.addEventListener("click", () => deleteAccount(btn.dataset.email));
+    });
+  } catch (error) {
+    metricsEl.innerHTML = "";
+    bodyEl.innerHTML = "";
+    emptyEl.textContent = error.message || "加载失败";
+    emptyEl.classList.remove("hidden");
+  }
+}
+
+async function deleteAccount(email) {
+  if (!confirm(`确认删除账户 ${email}?`)) return;
+  try {
+    await api("/api/admin/upstream/accounts", { method: "DELETE", body: JSON.stringify({ email }) });
+    showToast("账户已删除", "ri-delete-bin-line");
+    loadAccountsPage();
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  }
+}
+
+function openAddAccountDialog() {
+  openModal(`
+    <section class="modal dialog" style="max-width:480px;">
+      <button class="close-modal" type="button"><i class="ri-close-line"></i></button>
+      <div class="modal-title"><i class="ri-add-line"></i><h2>添加账户</h2></div>
+      <form id="addAccountForm" class="settings-form" style="padding:16px 0;">
+        <label class="field"><span class="field-label">邮箱/用户名</span><input id="addAccountEmail" class="field-input" placeholder="email@example.com" required></label>
+        <label class="field"><span class="field-label">Token / Session</span><input id="addAccountToken" class="field-input" type="password" placeholder="Token (可选)"></label>
+        <div class="field-row">
+          <button class="btn btn-primary" type="submit">添加</button>
+        </div>
+      </form>
+    </section>
+  `);
+  $("#addAccountForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const email = $("#addAccountEmail").value.trim();
+    const token = $("#addAccountToken").value.trim();
+    if (!email) return;
+    try {
+      await api("/api/admin/upstream/accounts", { method: "POST", body: JSON.stringify({ email, token }) });
+      closeModal();
+      showToast("账户已添加", "ri-checkbox-circle-line");
+      loadAccountsPage();
+    } catch (error) {
+      showToast(error.message, "ri-error-warning-line");
+    }
+  });
+}
+
+// --- Register / 注册机 ---
+async function loadRegisterPage() {
+  const contentEl = $("#registerContent");
+  try {
+    const data = await api("/api/admin/upstream/register");
+    const config = data.config || data;
+    const running = config.running || config.status === "running";
+    contentEl.innerHTML = `
+      <div class="masonry-item">
+        <div class="card">
+          <div class="card-header"><h3><i class="ri-robot-line"></i> 注册机状态</h3></div>
+          <div class="card-content">
+            <div class="register-status">
+              <span class="register-status-dot ${running ? "active" : "inactive"}"></span>
+              <span>${running ? "运行中" : "已停止"}</span>
+            </div>
+            <div class="register-config-grid">
+              ${Object.entries(config).filter(([k]) => k !== "running" && k !== "status").map(([key, value]) => `
+                <div class="register-config-item">
+                  <dt>${escapeHtml(key)}</dt>
+                  <dd>${escapeHtml(String(value ?? "--"))}</dd>
+                </div>
+              `).join("")}
+            </div>
+            <div class="field-row" style="margin-top:16px;">
+              <button class="btn btn-primary" id="registerStartBtn" type="button">${running ? "重启" : "启动"}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    $("#registerStartBtn")?.addEventListener("click", async () => {
+      try {
+        await api("/api/admin/upstream/register", { method: "POST" });
+        showToast("注册机已启动", "ri-checkbox-circle-line");
+        loadRegisterPage();
+      } catch (error) {
+        showToast(error.message, "ri-error-warning-line");
+      }
+    });
+  } catch (error) {
+    contentEl.innerHTML = `<div class="table-empty">${escapeHtml(error.message || "加载失败")}</div>`;
+  }
+}
+
+// --- Users / 用户管理 ---
+async function loadUsersPage() {
+  const metricsEl = $("#usersMetrics");
+  const bodyEl = $("#usersBody");
+  const emptyEl = $("#usersEmpty");
+  try {
+    const data = await api("/api/admin/users");
+    const users = data.users || [];
+    const active = users.filter((u) => u.status === "active").length;
+    const admins = users.filter((u) => u.role === "admin").length;
+    metricsEl.innerHTML = `
+      <div class="metric-card"><div class="metric-card-label">总用户</div><div class="metric-card-value">${users.length}</div></div>
+      <div class="metric-card"><div class="metric-card-label">活跃</div><div class="metric-card-value">${active}</div></div>
+      <div class="metric-card"><div class="metric-card-label">管理员</div><div class="metric-card-value">${admins}</div></div>
+    `;
+    if (users.length === 0) {
+      bodyEl.innerHTML = "";
+      emptyEl.classList.remove("hidden");
+      return;
+    }
+    emptyEl.classList.add("hidden");
+    bodyEl.innerHTML = users.map((user) => `<tr data-user-id="${user.id}">
+      <td><div class="user-cell"><strong>${escapeHtml(user.name || user.email)}</strong><span>${escapeHtml(user.email)}</span></div></td>
+      <td>
+        <select class="inline-select role-input" ${user.id === state.user.id ? "disabled" : ""}>
+          <option value="user" ${user.role === "user" ? "selected" : ""}>普通用户</option>
+          <option value="admin" ${user.role === "admin" ? "selected" : ""}>管理员</option>
+        </select>
+      </td>
+      <td>
+        <select class="inline-select status-input" ${user.id === state.user.id ? "disabled" : ""}>
+          <option value="active" ${user.status === "active" ? "selected" : ""}>正常</option>
+          <option value="disabled" ${user.status === "disabled" ? "selected" : ""}>禁用</option>
+        </select>
+      </td>
+      <td><input class="inline-input credits-input" type="number" min="0" value="${Number(user.credits || 0)}"></td>
+      <td><input class="inline-input credit-delta-input" type="number" step="1" value="0" style="width:60px;"></td>
+      <td>${user.createdAt ? formatDateTime(user.createdAt) : "--"}</td>
+      <td><button class="btn btn-ghost btn-xs save-user-btn" type="button"><i class="ri-save-line"></i> 保存</button></td>
+    </tr>`).join("");
+    $$(".save-user-btn", bodyEl).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const row = btn.closest("tr");
+        saveUserFromRow(row);
+      });
+    });
+  } catch (error) {
+    metricsEl.innerHTML = "";
+    bodyEl.innerHTML = "";
+    emptyEl.textContent = error.message || "加载失败";
+    emptyEl.classList.remove("hidden");
+  }
+}
+
+async function saveUserFromRow(row) {
+  const id = row.dataset.userId;
+  try {
+    const user = await api(`/api/admin/users/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        role: $(".role-input", row).value,
+        status: $(".status-input", row).value,
+        credits: Number($(".credits-input", row).value || 0),
+        creditDelta: Number($(".credit-delta-input", row).value || 0)
+      })
+    });
+    if (id === state.user.id) state.user = user.user || state.user;
+    $(".credit-delta-input", row).value = "0";
+    showToast("用户已保存", "ri-save-line");
+    updateNav();
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  }
+}
+
+// --- Logs / 日志管理 ---
+async function loadLogsPage(page = 1) {
+  adminLogsPage = page;
+  const bodyEl = $("#logsBody");
+  const emptyEl = $("#logsEmpty");
+  const pagEl = $("#logsPagination");
+  try {
+    const data = await api(`/api/admin/upstream/logs?page=${page}&limit=50`);
+    const logs = data.logs || data.items || [];
+    const total = data.total || logs.length;
+    adminLogsTotalPages = Math.max(1, Math.ceil(total / 50));
+    if (logs.length === 0) {
+      bodyEl.innerHTML = "";
+      emptyEl.classList.remove("hidden");
+      pagEl.innerHTML = "";
+      return;
+    }
+    emptyEl.classList.add("hidden");
+    bodyEl.innerHTML = logs.map((log) => {
+      const success = log.status === "success" || log.status_code === 200 || log.success;
+      return `<tr class="log-row" data-log='${escapeHtml(JSON.stringify(log))}'>
+        <td>${formatDateTime(log.time || log.created_at || log.timestamp)}</td>
+        <td>${escapeHtml(log.model || "--")}</td>
+        <td><div class="user-cell"><span>${escapeHtml(log.account || log.email || "--")}</span></div></td>
+        <td><span class="badge ${success ? "badge-green" : "badge-red"}">${success ? "成功" : "失败"}</span></td>
+        <td>${log.duration ? log.duration + "ms" : "--"}</td>
+        <td><button class="btn btn-ghost btn-xs log-detail-btn" type="button"><i class="ri-eye-line"></i></button></td>
+      </tr>`;
+    }).join("");
+    renderLogsPagination(pagEl);
+    $$(".log-detail-btn", bodyEl).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const row = btn.closest("tr");
+        try {
+          const logData = JSON.parse(row.dataset.log);
+          openLogDetail(logData);
+        } catch { /* skip */ }
+      });
+    });
+  } catch (error) {
+    bodyEl.innerHTML = "";
+    emptyEl.textContent = error.message || "加载失败";
+    emptyEl.classList.remove("hidden");
+    pagEl.innerHTML = "";
+  }
+}
+
+function renderLogsPagination(pagEl) {
+  if (adminLogsTotalPages <= 1) { pagEl.innerHTML = ""; return; }
+  let html = `<button ${adminLogsPage <= 1 ? "disabled" : ""} data-page="${adminLogsPage - 1}"><i class="ri-arrow-left-s-line"></i></button>`;
+  for (let p = 1; p <= adminLogsTotalPages; p++) {
+    if (adminLogsTotalPages > 7 && p > 3 && p < adminLogsTotalPages - 2 && Math.abs(p - adminLogsPage) > 1) {
+      if (p === 4 || p === adminLogsTotalPages - 3) html += `<span style="padding:0 4px;color:var(--muted);">...</span>`;
+      continue;
+    }
+    html += `<button class="${p === adminLogsPage ? "active" : ""}" data-page="${p}">${p}</button>`;
+  }
+  html += `<button ${adminLogsPage >= adminLogsTotalPages ? "disabled" : ""} data-page="${adminLogsPage + 1}"><i class="ri-arrow-right-s-line"></i></button>`;
+  pagEl.innerHTML = html;
+  $$("button[data-page]", pagEl).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const page = Number(btn.dataset.page);
+      if (page >= 1 && page <= adminLogsTotalPages) loadLogsPage(page);
+    });
+  });
+}
+
+function openLogDetail(log) {
+  const entries = Object.entries(log).filter(([k]) => k !== "id" && k !== "_id");
+  openModal(`
+    <section class="modal log-detail-dialog" style="max-width:640px;">
+      <button class="close-modal" type="button"><i class="ri-close-line"></i></button>
+      <div class="modal-title"><i class="ri-file-list-3-line"></i><h2>日志详情</h2></div>
+      <div style="padding:16px 0;max-height:60vh;overflow-y:auto;">
+        ${entries.map(([key, value]) => `
+          <div class="log-detail-row">
+            <div class="log-detail-label">${escapeHtml(key)}</div>
+            <div class="log-detail-value">${typeof value === "object" ? `<pre>${escapeHtml(JSON.stringify(value, null, 2))}</pre>` : escapeHtml(String(value ?? ""))}</div>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `);
+}
+
+async function deleteAllLogs() {
+  if (!confirm("确认清除全部日志?")) return;
+  try {
+    await api("/api/admin/upstream/logs/delete", { method: "POST" });
+    showToast("日志已清除", "ri-delete-bin-line");
+    loadLogsPage(1);
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  }
+}
+
+// --- Settings / 设置 ---
+async function loadSettingsPage() {
+  if (adminPageLoaded.settings) return;
+  adminPageLoaded.settings = true;
+  try {
+    const settings = await api("/api/admin/settings");
+    state.settings = settings;
+    $("#apiBaseUrlInput").value = settings.apiBaseUrl || "";
+    $("#modelInput").value = settings.model || "gpt-image-2";
+    $("#defaultCreditsInput").value = settings.defaultCredits ?? 10;
+    $("#generationCreditCostInput").value = settings.generationCreditCost ?? 1;
+    $("#maxImagesInput").value = settings.maxImagesPerRequest ?? 1;
+    $("#allowRegistrationInput").checked = Boolean(settings.allowRegistration);
+    $("#requireApprovalInput").checked = Boolean(settings.requireApproval);
+    $("#apiKeyMask").textContent = settings.apiKeyMask
+      ? `当前 Key: ${settings.apiKeyMask}`
+      : "未配置 Key";
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  }
+  loadUpstreamSettings();
+  loadBackups();
+  loadRedeemCodes();
+}
+
+async function saveApiSettings(event) {
+  event.preventDefault();
+  try {
+    const settings = await api("/api/admin/settings", {
+      method: "PATCH",
+      body: JSON.stringify({
+        openaiApiKey: $("#apiKeyInput").value.trim(),
+        apiBaseUrl: $("#apiBaseUrlInput").value.trim(),
+        model: $("#modelInput").value.trim(),
+      })
+    });
+    state.settings = settings;
+    $("#apiKeyInput").value = "";
+    $("#apiKeyMask").textContent = settings.apiKeyMask
+      ? `当前 Key: ${settings.apiKeyMask}`
+      : "未配置 Key";
+    showToast("接口配置已保存", "ri-checkbox-circle-line");
+    updateNav();
+    syncComposers();
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  }
+}
+
+async function saveCreditsSettings(event) {
+  event.preventDefault();
+  try {
+    const settings = await api("/api/admin/settings", {
+      method: "PATCH",
+      body: JSON.stringify({
+        defaultCredits: Number($("#defaultCreditsInput").value || 0),
+        generationCreditCost: Number($("#generationCreditCostInput").value || 0),
+        maxImagesPerRequest: Number($("#maxImagesInput").value || 1),
+        allowRegistration: $("#allowRegistrationInput").checked,
+        requireApproval: $("#requireApprovalInput").checked
+      })
+    });
+    state.settings = settings;
+    showToast("注册与积分设置已保存", "ri-checkbox-circle-line");
+    updateNav();
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  }
+}
+
+async function clearApiKey() {
+  try {
+    const settings = await api("/api/admin/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ clearApiKey: true })
+    });
+    state.settings = settings;
+    $("#apiKeyMask").textContent = "未配置 Key";
+    showToast("Key 已清除", "ri-delete-bin-line");
+    updateNav();
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  }
+}
+
+async function testApiConnection() {
+  const btn = $("#testApiBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block;"></span> 测试中...';
+  try {
+    const result = await api("/api/admin/settings/test", { method: "POST" });
+    showToast(result.message || "连接成功", "ri-checkbox-circle-line");
+  } catch (error) {
+    showToast(error.message || "连接失败", "ri-error-warning-line");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="ri-play-line"></i> 测试连接';
+  }
+}
+
+async function loadUpstreamSettings() {
+  const el = $("#upstreamSettingsContent");
+  try {
+    const data = await api("/api/admin/upstream/settings");
+    const config = data.config || data;
+    el.innerHTML = Object.entries(config).map(([key, value]) => `
+      <label class="field">
+        <span class="field-label">${escapeHtml(key)}</span>
+        <input class="field-input upstream-setting" data-key="${escapeHtml(key)}" value="${escapeHtml(String(value ?? ""))}">
+      </label>
+    `).join("");
+  } catch {
+    el.innerHTML = '<div class="field-hint">无法加载上游设置</div>';
+  }
+}
+
+async function saveUpstreamSettings(event) {
+  event.preventDefault();
+  const inputs = $$("#upstreamSettingsContent .upstream-setting");
+  const config = {};
+  inputs.forEach((input) => { config[input.dataset.key] = input.value; });
+  try {
+    await api("/api/admin/upstream/settings", { method: "POST", body: JSON.stringify(config) });
+    showToast("上游设置已保存", "ri-checkbox-circle-line");
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  }
+}
+
+async function loadBackups() {
+  const el = $("#backupContent");
+  try {
+    const data = await api("/api/admin/upstream/backups");
+    const backups = data.backups || [];
+    if (backups.length === 0) {
+      el.innerHTML = '<div class="field-hint">暂无备份记录</div>';
+      return;
+    }
+    el.innerHTML = `<div class="backup-list">${backups.map((b) => `
+      <div class="backup-item">
+        <div class="backup-item-info">
+          <strong>${escapeHtml(b.name || b.id || "--")}</strong>
+          <span>${formatDateTime(b.created_at || b.time)}</span>
+        </div>
+        <div class="backup-item-actions">
+          <button class="btn btn-ghost btn-xs backup-download" data-id="${escapeHtml(b.id || b.name)}" type="button"><i class="ri-download-line"></i></button>
+          <button class="btn btn-ghost btn-xs backup-delete" data-id="${escapeHtml(b.id || b.name)}" type="button"><i class="ri-delete-bin-line"></i></button>
+        </div>
+      </div>
+    `).join("")}</div>`;
+    $$(".backup-download", el).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        window.open(`/api/admin/upstream/backups/download?id=${encodeURIComponent(btn.dataset.id)}`);
+      });
+    });
+    $$(".backup-delete", el).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("确认删除该备份?")) return;
+        try {
+          await api("/api/admin/upstream/backups/delete", { method: "POST", body: JSON.stringify({ id: btn.dataset.id }) });
+          showToast("备份已删除", "ri-delete-bin-line");
+          loadBackups();
+        } catch (error) {
+          showToast(error.message, "ri-error-warning-line");
+        }
+      });
+    });
+  } catch {
+    el.innerHTML = '<div class="field-hint">无法加载备份列表</div>';
+  }
+}
+
+async function runBackup() {
+  try {
+    await api("/api/admin/upstream/backups/run", { method: "POST" });
+    showToast("备份已开始", "ri-checkbox-circle-line");
+    setTimeout(loadBackups, 2000);
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  }
+}
+
+async function testBackup() {
+  try {
+    const result = await api("/api/admin/upstream/backups/test", { method: "POST" });
+    showToast(result.message || "测试成功", "ri-checkbox-circle-line");
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  }
+}
+
+async function loadRedeemCodes() {
+  const el = $("#redeemCodesList");
+  try {
+    const data = await api("/api/admin/redeem-codes");
+    const codes = data.codes || [];
+    if (codes.length === 0) {
+      el.innerHTML = '<div class="field-hint">暂无兑换码</div>';
+      return;
+    }
+    el.innerHTML = codes.map((c) => `
+      <div class="redeem-code-item">
+        <code>${escapeHtml(c.code)}</code>
+        <span class="badge ${c.used ? "badge-gray" : "badge-green"}">${c.used ? "已使用" : `${c.credits}积分`}</span>
+      </div>
+    `).join("");
+  } catch {
+    el.innerHTML = '<div class="field-hint">无法加载兑换码</div>';
+  }
+}
+
+async function generateRedeemCodes(event) {
+  event.preventDefault();
+  const credits = Number($("#redeemCreditsInput").value || 10);
+  const count = Number($("#redeemCountInput").value || 1);
+  try {
+    const data = await api("/api/admin/redeem-codes", {
+      method: "POST",
+      body: JSON.stringify({ credits, count })
+    });
+    showToast(`已生成 ${data.codes?.length || count} 个兑换码`, "ri-checkbox-circle-line");
+    loadRedeemCodes();
+  } catch (error) {
+    showToast(error.message, "ri-error-warning-line");
+  }
+}
+
+// --- Bind admin page events ---
+function bindAdminPageEvents() {
+  // Accounts
+  $("#accountsRefreshBtn")?.addEventListener("click", loadAccountsPage);
+  $("#accountsAddBtn")?.addEventListener("click", openAddAccountDialog);
+
+  // Register
+  $("#registerRefreshBtn")?.addEventListener("click", loadRegisterPage);
+
+  // Users
+  $("#usersRefreshBtn")?.addEventListener("click", loadUsersPage);
+  const usersSearchInput = $("#usersSearchInput");
+  let usersSearchTimer;
+  usersSearchInput?.addEventListener("input", () => {
+    clearTimeout(usersSearchTimer);
+    usersSearchTimer = setTimeout(() => {
+      const query = usersSearchInput.value.trim().toLowerCase();
+      $$("#usersBody tr").forEach((row) => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(query) ? "" : "none";
+      });
+    }, 200);
+  });
+
+  // Logs
+  $("#logsRefreshBtn")?.addEventListener("click", () => loadLogsPage(1));
+  $("#logsDeleteBtn")?.addEventListener("click", deleteAllLogs);
+  const logsSearchInput = $("#logsSearchInput");
+  let logsSearchTimer;
+  logsSearchInput?.addEventListener("input", () => {
+    clearTimeout(logsSearchTimer);
+    logsSearchTimer = setTimeout(() => {
+      const query = logsSearchInput.value.trim().toLowerCase();
+      $$("#logsBody tr").forEach((row) => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(query) ? "" : "none";
+      });
+    }, 200);
+  });
+
+  // Settings
+  $("#settingsApiForm")?.addEventListener("submit", saveApiSettings);
+  $("#settingsCreditsForm")?.addEventListener("submit", saveCreditsSettings);
+  $("#settingsUpstreamForm")?.addEventListener("submit", saveUpstreamSettings);
+  $("#clearApiKeyBtn")?.addEventListener("click", clearApiKey);
+  $("#testApiBtn")?.addEventListener("click", testApiConnection);
+  $("#backupRunBtn")?.addEventListener("click", runBackup);
+  $("#backupTestBtn")?.addEventListener("click", testBackup);
+  $("#redeemCodeForm")?.addEventListener("submit", generateRedeemCodes);
+}
